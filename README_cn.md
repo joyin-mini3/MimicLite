@@ -6,15 +6,15 @@ MimicLite 是一个高效、通用的人形机器人动作跟踪系统，可在 
 
 技术报告位于 [`mimic-lite.pdf`](mimic-lite.pdf)。
 
-## 项目仓库
+## 项目组件
 
-本仓库是 MimicLite 的项目入口。训练、评测、数据转换和部署说明分别由对应仓库维护：
+本仓库是 MimicLite 的项目入口。Mini3 动作转换工具已直接放入 `any4hdmi/`，不再作为独立 submodule；已有训练和部署组件仍保留其上游引用：
 
 | 组件 | 仓库 | 内容 |
 | --- | --- | --- |
 | MimicLite | [`EGalahad/mimic-lite`](https://github.com/EGalahad/mimic-lite) | 训练、评测、策略导出、任务配置和学习代码。 |
 | 训练框架 | [`Agent-3154/active-adaptation`](https://github.com/Agent-3154/active-adaptation) | 仿真后端、分布式启动器、环境和共享基础设施。 |
-| 动作数据工具 | [`EGalahad/any4hdmi`](https://github.com/EGalahad/any4hdmi) | 动作转换、验证、可视化和数据集工具。 |
+| 动作数据工具 | [`any4hdmi/`](any4hdmi/) | 随主仓库提供的动作转换、验证、可视化和数据集工具。 |
 | 部署运行时 | [`EGalahad/sim2real`](https://github.com/EGalahad/sim2real) | ONNX 推理、MuJoCo sim2sim、Pico 遥操作和 Unitree G1 部署。 |
 
 ## 已发布 Checkpoint
@@ -41,7 +41,27 @@ MimicLite 是一个高效、通用的人形机器人动作跟踪系统，可在 
 
 ## 训练数据
 
-已公开的训练数据集统一收录在 [`any4hdmi` Hugging Face collection](https://huggingface.co/collections/elijahgalahad/any4hdmi)。唯一的例外是 [`BONES-SEED` 数据集](https://huggingface.co/datasets/bones-studio/seed)：为遵守其许可证和再分发条款，用户需要从原始来源获取数据；[`EGalahad/any4hdmi`](https://github.com/EGalahad/any4hdmi) 只提供对应的转换脚本和处理工具。
+已公开的训练数据集统一收录在 [`any4hdmi` Hugging Face collection](https://huggingface.co/collections/elijahgalahad/any4hdmi)。唯一的例外是 [`BONES-SEED` 数据集](https://huggingface.co/datasets/bones-studio/seed)：为遵守其许可证和再分发条款，用户需要从原始来源获取数据。本仓库在 [`any4hdmi/`](any4hdmi/) 中直接提供转换脚本和处理工具。
+
+### 本地转换 Mini3 数据
+
+在 `any4hdmi/` 下执行：
+
+```bash
+uv run any4hdmi-convert-mini3-pkl \
+  --input-path /home/amax/Desktop/robot/UFO/humanoidverse/data/pkl
+```
+
+转换结果位于 `any4hdmi/output/mini3/sonic/`。该目录已被 Git 明确忽略，
+不会随代码提交；请单独上传到服务器代码目录中的相同路径。转换脚本和
+Mini3 MJCF/meshes 会随主仓库上传，转换后的动作数据不会。
+
+## Mini3 训练与 Sim2Sim
+
+Mini3 的 21 关节训练任务、严格导出契约和 MuJoCo Sim2Sim 已接入。RTX 4090
+环境安装、训练 smoke、正式 PPO、静态 ONNX 导出和 seed 0 评测命令见
+[`docs/mini3_train_sim2sim_plan.md`](docs/mini3_train_sim2sim_plan.md#5-执行命令模板)。
+训练固定读取 `any4hdmi/output/mini3/sonic/`，不会从 Git 或第三方仓库下载动作数据。
 
 ## 部署支持
 

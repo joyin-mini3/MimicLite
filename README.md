@@ -6,15 +6,15 @@ MimicLite is an efficient, general humanoid motion-tracking system that can trai
 
 The technical report is available at [`mimic-lite.pdf`](mimic-lite.pdf).
 
-## Project Repositories
+## Project Components
 
-This repository is the project landing page. Training, evaluation, dataset conversion, and deployment instructions are maintained in their respective repositories:
+This repository is the project landing page. The Mini3 motion conversion toolkit is vendored directly under `any4hdmi/`; it is not a separate submodule. The existing training and deployment components retain their upstream references:
 
 | Component | Repository | Contents |
 | --- | --- | --- |
 | MimicLite | [`EGalahad/mimic-lite`](https://github.com/EGalahad/mimic-lite) | Training, evaluation, policy export, task configs, and learning code. |
 | Training framework | [`Agent-3154/active-adaptation`](https://github.com/Agent-3154/active-adaptation) | Simulation backends, distributed launchers, environments, and shared infrastructure. |
-| Motion data toolkit | [`EGalahad/any4hdmi`](https://github.com/EGalahad/any4hdmi) | Motion conversion, validation, visualization, and dataset tooling. |
+| Motion data toolkit | [`any4hdmi/`](any4hdmi/) | Motion conversion, validation, visualization, and dataset tooling bundled in this repository. |
 | Deployment runtime | [`EGalahad/sim2real`](https://github.com/EGalahad/sim2real) | ONNX inference, MuJoCo sim2sim, Pico teleoperation, and Unitree G1 deployment. |
 
 ## Released Checkpoints
@@ -43,7 +43,29 @@ the shared 50 Hz reference-motion contract.
 
 ## Training Data
 
-Released training datasets are collected in the [`any4hdmi` Hugging Face collection](https://huggingface.co/collections/elijahgalahad/any4hdmi). The [`BONES-SEED` dataset](https://huggingface.co/datasets/bones-studio/seed) is the exception: to respect its license and redistribution terms, users obtain it from the original source, while [`EGalahad/any4hdmi`](https://github.com/EGalahad/any4hdmi) provides only the conversion scripts and processing tools.
+Released training datasets are collected in the [`any4hdmi` Hugging Face collection](https://huggingface.co/collections/elijahgalahad/any4hdmi). The [`BONES-SEED` dataset](https://huggingface.co/datasets/bones-studio/seed) is the exception: to respect its license and redistribution terms, users obtain it from the original source. This repository bundles the conversion scripts and processing tools under [`any4hdmi/`](any4hdmi/).
+
+### Local Mini3 dataset
+
+Convert Mini3 PKLs locally from `any4hdmi/`:
+
+```bash
+uv run any4hdmi-convert-mini3-pkl \
+  --input-path /home/amax/Desktop/robot/UFO/humanoidverse/data/pkl
+```
+
+Converted files are written to `any4hdmi/output/mini3/sonic/`. That directory
+is intentionally Git-ignored: upload it separately to the same path in the
+server checkout. Source code and the Mini3 MJCF/meshes are part of this main
+repository; converted motions are not.
+
+## Mini3 Training and Sim2Sim
+
+The 21-joint Mini3 training task, strict export contract, and MuJoCo Sim2Sim
+path are integrated. See the [implementation and command guide](docs/mini3_train_sim2sim_plan.md#5-执行命令模板)
+for RTX 4090 setup, training smoke tests, PPO training, static ONNX export, and
+seed-0 evaluation. Training reads `any4hdmi/output/mini3/sonic/` directly and
+does not download motion data from Git or a third-party repository.
 
 ## Deployment Support
 

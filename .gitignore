@@ -16,3 +16,6 @@ __pycache__/
 Thumbs.db
 MUJOCO_LOG.TXT
 
+# Locally converted motion datasets. Upload these to the server separately;
+# never include them in the source-code repository.
+/any4hdmi/output/

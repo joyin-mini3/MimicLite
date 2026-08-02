@@ -1,0 +1,51 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "any4hdmi"
+version = "0.1.0"
+description = "Unified qpos-based motion conversion and MuJoCo playback for HDMI-related datasets."
+requires-python = ">=3.10"
+dependencies = [
+    "huggingface_hub",
+    "joblib",
+    "matplotlib",
+    "mjhub @ git+https://github.com/EGalahad/mjhub.git@main",
+    "mjviser",
+    "mujoco",
+    "numpy",
+    "pandas",
+    "scikit-learn",
+    "tensordict",
+    "torch",
+    "tqdm",
+    "tyro",
+    "viser",
+]
+
+[project.optional-dependencies]
+warp = [
+    "mujoco-warp>=3.5.0.2",
+    "warp-lang",
+]
+
+[project.scripts]
+any4hdmi-view = "any4hdmi.scripts.viewer:main"
+any4hdmi-convert-lafan = "any4hdmi.scripts.preprocess.lafan:main"
+any4hdmi-convert-sonic = "any4hdmi.scripts.preprocess.sonic:main"
+any4hdmi-convert-mini3-pkl = "any4hdmi.scripts.preprocess.mini3_pkl:main"
+any4hdmi-convert-axellwppr = "any4hdmi.scripts.preprocess.axellwppr:main"
+any4hdmi-filter-dataset = "any4hdmi.scripts.filter:main"
+any4hdmi-upload = "any4hdmi.scripts.upload:main"
+any4hdmi-limmt-score = "any4hdmi.limmt.physical_filter:main"
+any4hdmi-limmt-train-hme = "any4hdmi.limmt.hme.train:main"
+any4hdmi-limmt-embed = "any4hdmi.limmt.embed:main"
+any4hdmi-limmt-visualize = "any4hdmi.limmt.visualize:main"
+any4hdmi-limmt-gqs = "any4hdmi.limmt.gqs:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
