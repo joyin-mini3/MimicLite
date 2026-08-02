@@ -1,0 +1,44 @@
+hydra:
+  run:
+    dir: ./outputs/${now:%Y-%m-%d}/${now:%H-%M-%S}-${task.name}-${algo.name}
+  job:
+    chdir: true
+
+headless: true
+exp_name: ${oc.select:task.name,test}-${oc.select:algo.name,none}
+
+backend: mjlab
+device: cuda
+
+app:
+  headless: ${..headless}
+  enable_cameras: ${..eval_render}
+
+# total_frames: 300_000_000
+total_frames: 150_000_000
+total_iters: null
+max_iters: -1
+eval_interval: -1
+eval_render: false
+checkpoint_interval: 500
+upload_interval: 500
+render_interval: -1
+render_decimation: 4
+seed: 42
+checkpoint_path: null
+export_policy: false
+
+camera_follow: true
+
+wandb:
+  name: ${..exp_name}/${now:%m-%d}_${now:%H-%M}
+  job_type: train
+  project: mimic_lite
+  mode: online # set to 'disabled' when debugging locally
+  id: null
+  tags: []
+
+defaults:
+  - task: tracking-base
+  - algo: mimic_lite_ppo
+  - _self_

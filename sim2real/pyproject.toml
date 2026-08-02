@@ -1,0 +1,67 @@
+[project]
+name = "hdmi-sim2real"
+version = "0.1.0"
+description = "HDMI sim2real development"
+readme = "README.md"
+authors = [{ name = "HDMI Contributors" }]
+requires-python = "==3.10.*"
+dependencies = [
+    "mujoco",
+    "mjviser",
+    "mjhub @ git+https://github.com/EGalahad/mjhub.git@main",
+    "loguru",
+    "pyyaml",
+    "scipy",
+    "torch",
+    "onnx==1.17.0",
+    "sshkeyboard",
+    "pyzmq",
+    "tqdm",
+    "tyro",
+    "unitree-sdk2py @ git+https://github.com/EGalahad/unitree_sdk2_python.git",
+    "any4hdmi",
+]
+
+[dependency-groups]
+cpu = [
+    "onnxruntime",
+]
+g1 = [
+    "onnxruntime",
+    "unitree-interface==0.1.0; sys_platform == 'linux' and platform_machine == 'aarch64'",
+]
+g1-gpu = [
+    "numpy<2",
+    "onnxruntime-gpu==1.16.0; sys_platform == 'linux' and platform_machine == 'aarch64'",
+    "unitree-interface==0.1.0; sys_platform == 'linux' and platform_machine == 'aarch64'",
+]
+
+# [project.optional-dependencies]
+# tensorrt = [
+    # "tensorrt ; sys_platform == 'linux' and platform_machine == 'x86_64'",
+# ]
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["sim2real*"]
+
+[tool.uv]
+package = true
+find-links = ["third_party/wheels"]
+
+[[tool.uv.index]]
+name = "nvidia-pypi"
+url = "https://pypi.nvidia.com/"
+explicit = true
+
+[[tool.uv.index]]
+name = "jetson-ai-lab-jp6-cu126"
+url = "https://pypi.jetson-ai-lab.io/jp6/cu126"
+explicit = true
+
+[tool.uv.sources]
+tensorrt = { index = "nvidia-pypi" }
+any4hdmi = { path = "../any4hdmi", editable = true }

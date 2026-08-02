@@ -1,0 +1,9 @@
+# @package task.command
+
+windowed_next_window_device: current
+windowed_pin_window_load: true
+motion_cfgs:
+  extreme:
+    path: "../any4hdmi/output/g1/extreme_motions"
+    weight: 1.0
+    full_motion: true

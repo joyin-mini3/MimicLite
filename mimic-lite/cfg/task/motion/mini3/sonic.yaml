@@ -1,0 +1,7 @@
+# @package task.command
+
+motion_cfgs:
+  sonic:
+    path: ../any4hdmi/output/mini3/sonic
+    weight: 1.0
+    full_motion: false

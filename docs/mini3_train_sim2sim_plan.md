@@ -74,7 +74,7 @@ Mini3 启用严格模式：21 个 joint 名称必须唯一；`default_joint_pos`
 ### 阶段 0：4090 服务器环境
 
 1. 以服务器 NVIDIA RTX 4090 作为唯一训练环境验收目标，不在本方案中处理本机 5090/SM120 的覆盖或隔离安装。
-2. `any4hdmi/` 作为根仓库直接跟踪的普通源码目录，不设置独立 `.git`，也不加入 `.gitmodules`；服务器克隆根仓库即可获得转换代码和 Mini3 资产。既有 `active-adaptation`、`mimic-lite`、`sim2real` 仍保持固定 submodule commit，可用 `git clone --recurse-submodules` 一次取得。之后用 `uv --project venv/mjlab sync --locked` 创建或同步环境；禁止使用未纳入版本控制的本地目录满足 editable dependency。
+2. `active-adaptation/`、`mimic-lite/`、`sim2real/` 和 `any4hdmi/` 均由根仓库作为普通源码目录直接跟踪，不保留独立 `.git`，也不使用 `.gitmodules`；服务器普通克隆根仓库即可获得全部代码和 Mini3 资产。之后用 `uv --project venv/mjlab sync --locked` 创建或同步环境；禁止使用未纳入版本控制的本地目录满足 editable dependency。
 3. 在服务器的 `active-adaptation/venv/mjlab` 环境中确认 PyTorch 可见全部训练 GPU、每张卡 capability 为 `(8, 9)`，并完成 CUDA tensor、Warp 和 MJLab 导入/运行检查。
 4. 正式训练前先运行单卡 1-env 启动测试，再运行计划使用 GPU 数量的最小 DDP 测试；两者均通过后才允许开始 4000-iteration 训练。
 
@@ -144,10 +144,10 @@ Mini3 启用严格模式：21 个 joint 名称必须唯一；`default_joint_pos`
 
 ## 5. 执行命令模板
 
-服务器用一条 clone 命令取得主仓库和既有 submodule 中的全部代码；`any4hdmi` 已直接包含在主仓库中：
+服务器用普通 clone 命令即可取得全部代码；仓库不包含 submodule：
 
 ```bash
-git clone --recurse-submodules <mimiclite-repository-url>
+git clone <mimiclite-repository-url>
 cd MimicLite
 test -f any4hdmi/pyproject.toml
 test -f mimic-lite/pyproject.toml

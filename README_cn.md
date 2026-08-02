@@ -8,14 +8,14 @@ MimicLite 是一个高效、通用的人形机器人动作跟踪系统，可在 
 
 ## 项目组件
 
-本仓库是 MimicLite 的项目入口。Mini3 动作转换工具已直接放入 `any4hdmi/`，不再作为独立 submodule；已有训练和部署组件仍保留其上游引用：
+本仓库是包含全部源码的单体仓库。训练、任务、动作转换和部署代码均由下列目录直接跟踪；上游链接仅用于说明来源。普通 `git clone` 即可取得全部源码，无需初始化 submodule：
 
-| 组件 | 仓库 | 内容 |
+| 组件 | 路径 / 上游 | 内容 |
 | --- | --- | --- |
-| MimicLite | [`EGalahad/mimic-lite`](https://github.com/EGalahad/mimic-lite) | 训练、评测、策略导出、任务配置和学习代码。 |
-| 训练框架 | [`Agent-3154/active-adaptation`](https://github.com/Agent-3154/active-adaptation) | 仿真后端、分布式启动器、环境和共享基础设施。 |
+| MimicLite | [`mimic-lite/`](mimic-lite/)（[上游](https://github.com/EGalahad/mimic-lite)） | 训练、评测、策略导出、任务配置和学习代码。 |
+| 训练框架 | [`active-adaptation/`](active-adaptation/)（[上游](https://github.com/Agent-3154/active-adaptation)） | 仿真后端、分布式启动器、环境和共享基础设施。 |
 | 动作数据工具 | [`any4hdmi/`](any4hdmi/) | 随主仓库提供的动作转换、验证、可视化和数据集工具。 |
-| 部署运行时 | [`EGalahad/sim2real`](https://github.com/EGalahad/sim2real) | ONNX 推理、MuJoCo sim2sim、Pico 遥操作和 Unitree G1 部署。 |
+| 部署运行时 | [`sim2real/`](sim2real/)（[上游](https://github.com/EGalahad/sim2real)） | ONNX 推理、MuJoCo sim2sim、Pico 遥操作和 Unitree G1 部署。 |
 
 ## 已发布 Checkpoint
 
@@ -65,8 +65,8 @@ Mini3 的 21 关节训练任务、严格导出契约和 MuJoCo Sim2Sim 已接入
 
 ## 部署支持
 
-[`sim2real`](https://github.com/EGalahad/sim2real) 提供模块化 observation 接口，将各策略特有的输入构造与共享部署运行时分离。接入新策略只需要实现对应的 observation class 和 YAML 配置，推理、仿真器与机器人接口均保持不变。同一条公共路径已支持 MimicLite、HEFT、TeleopIT、Humanoid-GPT、BFM-Zero、SONIC 和 TWIST2 的 MuJoCo 集成评测与真机执行。Policy 推理通过可替换的 MuJoCo 和 Unitree G1 真机 backend 与机器人 I/O 解耦。
+[`sim2real/`](sim2real/) 提供模块化 observation 接口，将各策略特有的输入构造与共享部署运行时分离。接入新策略只需要实现对应的 observation class 和 YAML 配置，推理、仿真器与机器人接口均保持不变。同一条公共路径已支持 MimicLite、HEFT、TeleopIT、Humanoid-GPT、BFM-Zero、SONIC 和 TWIST2 的 MuJoCo 集成评测与真机执行。Policy 推理通过可替换的 MuJoCo 和 Unitree G1 真机 backend 与机器人 I/O 解耦。
 
 ## 许可证
 
-本集成仓库采用 GPL-3.0-or-later。各组件仓库保留自身历史和许可证文件；重新分发前需要分别确认数据集和组件许可证。
+本集成仓库采用 GPL-3.0-or-later。纳入本仓库的组件目录保留各自上游许可证文件；重新分发前需要分别确认数据集和组件许可证。

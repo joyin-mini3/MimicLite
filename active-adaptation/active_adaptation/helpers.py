@@ -1,0 +1,177 @@
+import torch
+import hydra
+import numpy as np
+import time
+import os
+import datetime
+import imageio.v2 as imageio
+
+from termcolor import colored
+from omegaconf import OmegaConf, DictConfig
+from tensordict import TensorDictBase
+from active_adaptation.utils.wandb import parse_checkpoint, CheckpointBase
+from active_adaptation.utils.profiling import ScopedTimer
+
+import active_adaptation
+
+class Every:
+    def __init__(self, func, steps):
+        self.func = func
+        self.steps = steps
+        self.i = 0
+
+    def __call__(self, *args, **kwargs):
+        if self.i % self.steps == 0:
+            self.func(*args, **kwargs)
+        self.i += 1
+
+
+def make_env_policy(cfg: DictConfig, checkpoint: CheckpointBase | None = None):
+    OmegaConf.set_struct(cfg, False)
+    cfg.seed = cfg.seed + active_adaptation.get_local_rank()
+    
+    from active_adaptation.envs import _EnvBase
+    from torchrl.envs.transforms import TransformedEnv, Compose, InitTracker, StepCounter
+    
+    # Select the appropriate backend-specific environment class
+    backend = active_adaptation.get_backend()
+    if backend == "isaaclab":
+        env_cls = _EnvBase.registry[cfg.task.get("env_class", "IsaacBackendEnv")]
+    elif backend == "mujoco":
+        env_cls = _EnvBase.registry[cfg.task.get("env_class", "MujocoBackendEnv")]
+        cfg.task.num_envs = 1
+        cfg.task.reward = {}
+    elif backend == "mjlab":
+        env_cls = _EnvBase.registry[cfg.task.get("env_class", "MjlabBackendEnv")]
+    else:
+        raise ValueError(f"Unknown backend: {backend}")
+    
+    policy_in_keys = cfg.algo.get("in_keys", None)
+    if policy_in_keys is None:
+        raise ValueError("Specify `in_keys` (e.g., `policy`, `priv`) in `cfg.algo`.")
+
+    for obs_group_key in list(cfg.task.observation.keys()):
+        if (
+            obs_group_key not in policy_in_keys
+            and not obs_group_key.endswith("_")
+            and not obs_group_key.startswith("_")
+        ):
+            cfg.task.observation.pop(obs_group_key)
+            print(colored(f"Discard obs group {obs_group_key} as it is not used.", "yellow"))
+    
+    base_env = env_cls(cfg.task, str(cfg.device), headless=cfg.headless)
+
+    if checkpoint is None:
+        checkpoint = parse_checkpoint(cfg.checkpoint_path)
+    if checkpoint is not None:
+        checkpoint.update()
+    checkpoint_path = checkpoint.get_path() if checkpoint else None
+    print(f"[Info]: Using checkpoint from: {checkpoint_path}")
+    if checkpoint_path is not None:
+        state_dict = torch.load(checkpoint_path, weights_only=False)
+    else:
+        state_dict = {}
+    
+    transform = Compose(InitTracker(), StepCounter())
+
+    env = TransformedEnv(base_env, transform)
+    env.set_seed(cfg.seed)
+    
+    # setup policy
+    policy_cls = hydra.utils.get_class(cfg.algo._target_)
+    print(f"Creating policy {policy_cls} on device {base_env.device}")
+    policy = policy_cls(
+        cfg.algo,
+        env.observation_spec, 
+        env.action_spec, 
+        env.reward_spec,
+        device=base_env.device,
+        env=env
+    )
+    
+    if "policy" in state_dict.keys():
+        print(colored("[Info]: Load policy from checkpoint.", "green"))
+        policy.load_state_dict(state_dict["policy"])
+    
+    if hasattr(policy, "make_tensordict_primer"):
+        primer = policy.make_tensordict_primer()
+        print(colored(f"[Info]: Add TensorDictPrimer {primer}.", "green"))
+        transform.append(primer)
+        env = TransformedEnv(env.base_env, transform)
+
+    return env, policy
+
+
+from torchrl.envs import TransformedEnv, ExplorationType, set_exploration_type
+from tqdm import tqdm
+
+@torch.inference_mode()
+def evaluate(
+    env: TransformedEnv,
+    policy: torch.nn.Module,
+    seed: int=0, 
+    exploration_type: ExplorationType=ExplorationType.MODE,
+    render=False,
+    keys=[("next", "stats")],
+):
+    """
+    Evaluate the policy on the environment, selecting `keys` from the trajectory.
+    If `render` is True, record and save the video.
+    """
+    keys = set(keys)
+    keys.add(("next", "done"))
+
+    env.eval()
+    env.set_seed(seed)
+
+    tensordict_ = env.reset()
+    trajs = []
+    frames = []
+
+    inference_time = []
+    torch.compiler.cudagraph_mark_step_begin()
+    max_episode_length = env.cfg.max_episode_length
+    with ScopedTimer("rollout"), set_exploration_type(exploration_type):
+        for i in tqdm(range(max_episode_length), miniters=10):
+            s = time.perf_counter()
+            tensordict_ = policy(tensordict_)
+            e = time.perf_counter()
+            inference_time.append(e - s)
+            tensordict, tensordict_ = env.step_and_maybe_reset(tensordict_)
+            trajs.append(tensordict.select(*keys, strict=False).cpu())
+            if render:
+                frames.append(env.render("rgb_array"))
+    inference_time = np.mean(inference_time[5:])
+    print(f"Average inference time: {inference_time:.4f} s")
+
+    trajs: TensorDictBase = torch.stack(trajs, dim=1)
+    done = trajs.get(("next", "done"))
+    episode_cnt = len(done.nonzero())
+    first_done = torch.argmax(done.long(), dim=1).cpu()
+
+    def take_first_episode(tensor: torch.Tensor):
+        indices = first_done.reshape(first_done.shape+(1,)*(tensor.ndim-2))
+        return torch.take_along_dim(tensor, indices, dim=1).reshape(-1)
+
+    info = {}
+    stats = {}
+    compute_std_for = ["return", "survival"]
+    for k, v in trajs["next", "stats"].items(True, True):
+        v = take_first_episode(v)
+        key = "eval/" + ("/".join(k) if isinstance(k, tuple) else k)
+        stats[key] = v
+        info[key] = torch.mean(v.float()).item()
+        if k in compute_std_for:
+            info[key + "_std"] = torch.std(v.float()).item()
+
+    # log video
+    if len(frames):
+        time_str = datetime.datetime.now().strftime("%m-%d_%H-%M")
+        video_path = os.path.join(os.path.dirname(__file__), f"recording-{time_str}.mp4")
+        with imageio.get_writer(video_path, fps=int(1 / env.step_dt), codec="h264") as writer:
+            for frame in frames:
+                writer.append_data(np.asarray(frame, dtype=np.uint8))
+        frames.clear()
+
+    info["episode_cnt"] = episode_cnt
+    return dict(sorted(info.items())), trajs, stats

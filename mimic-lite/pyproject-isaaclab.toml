@@ -1,0 +1,24 @@
+[project]
+name = "aa-isaaclab-env"
+version = "0.1.0"
+requires-python = "==3.11.*"
+dependencies = [
+    "active_adaptation[isaaclab]",
+    "mimic-lite",
+]
+
+[tool.uv.sources]
+active_adaptation = { path = "../..", editable = true }
+mimic-lite = { path = "../../projects/mimic-lite", editable = true }
+
+[[tool.uv.index]]
+name = "nvidia"
+url = "https://pypi.nvidia.com/"
+
+[tool.uv]
+package = false
+override-dependencies = [
+    "torch==2.10.*",
+    "torchvision==0.25.*",
+    "torchaudio==2.10.*",
+]

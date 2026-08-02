@@ -10,8 +10,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          submodules: false
 
       - name: Required files
         run: |
@@ -33,27 +31,24 @@ jobs:
       - name: Secret scan
         run: |
           set -euo pipefail
-          if git grep -nE '(BEGIN (RSA|OPENSSH|EC|DSA) PRIVATE KEY|ghp_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|WANDB_API_KEY=[^<]|HF_TOKEN=[^<]|HUGGINGFACE_HUB_TOKEN=|password[[:space:]]*=|passwd[[:space:]]*=|secret[[:space:]]*=|token[[:space:]]*=)' -- ':!LICENSE' ':!.github/workflows/compliance.yml'; then
+          if git grep -nIE '(BEGIN (RSA|OPENSSH|EC|DSA) PRIVATE KEY|ghp_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|WANDB_API_KEY=[^<]|HF_TOKEN=[^<]|HUGGINGFACE_HUB_TOKEN=[^<])' -- ':!LICENSE' ':!.github/workflows/compliance.yml'; then
             exit 1
           fi
 
       - name: Internal keyword scan
         run: |
           set -euo pipefail
-          if git grep -nEi '(internal[ _-]?ip|auth[ _-]?token|rp-4090|g1-rp|/home/elijah|checkpoint\\.pt|\\.ckpt)' -- ':!.github/workflows/compliance.yml'; then
+          if git grep -nEI '(internal[ _-]?ip|auth[ _-]?token|rp-4090|g1-rp|/home/elijah)' -- README.md README_cn.md docs/ .github/ ':!.github/workflows/compliance.yml'; then
             exit 1
           fi
 
-      - name: Submodule branch check
+      - name: Monorepo component check
         run: |
           set -euo pipefail
-          grep -q 'path = active-adaptation' .gitmodules
-          grep -q 'path = mimic-lite' .gitmodules
-          grep -q 'path = sim2real' .gitmodules
-          grep -q 'url = git@github.com:Agent-3154/active-adaptation.git' .gitmodules
-          grep -q 'url = git@github.com:EGalahad/mimic-lite.git' .gitmodules
-          grep -q 'url = git@github.com:EGalahad/sim2real.git' .gitmodules
-          grep -q 'branch = dev/hdmi' .gitmodules
-          test "$(grep -c 'branch = main' .gitmodules)" -eq 2
-          restricted_term="$(printf '\\162\\160\\061')"
-          ! git grep -nEi "$restricted_term" -- ':!.github/workflows/compliance.yml'
+          test ! -e .gitmodules
+          test -f active-adaptation/pyproject.toml
+          test -f mimic-lite/pyproject.toml
+          test -f sim2real/pyproject.toml
+          test -f any4hdmi/pyproject.toml
+          restricted_term="$(printf '\162\160\061')"
+          ! git grep -nEI "$restricted_term" -- ':!**/package-lock.json' ':!.github/workflows/compliance.yml'

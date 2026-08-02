@@ -8,14 +8,14 @@ The technical report is available at [`mimic-lite.pdf`](mimic-lite.pdf).
 
 ## Project Components
 
-This repository is the project landing page. The Mini3 motion conversion toolkit is vendored directly under `any4hdmi/`; it is not a separate submodule. The existing training and deployment components retain their upstream references:
+This repository is a self-contained monorepo. Training, task, conversion, and deployment sources are tracked directly in the directories below; the upstream links are retained for provenance only. A normal `git clone` obtains all source code without submodule initialization:
 
-| Component | Repository | Contents |
+| Component | Path / upstream | Contents |
 | --- | --- | --- |
-| MimicLite | [`EGalahad/mimic-lite`](https://github.com/EGalahad/mimic-lite) | Training, evaluation, policy export, task configs, and learning code. |
-| Training framework | [`Agent-3154/active-adaptation`](https://github.com/Agent-3154/active-adaptation) | Simulation backends, distributed launchers, environments, and shared infrastructure. |
+| MimicLite | [`mimic-lite/`](mimic-lite/) ([upstream](https://github.com/EGalahad/mimic-lite)) | Training, evaluation, policy export, task configs, and learning code. |
+| Training framework | [`active-adaptation/`](active-adaptation/) ([upstream](https://github.com/Agent-3154/active-adaptation)) | Simulation backends, distributed launchers, environments, and shared infrastructure. |
 | Motion data toolkit | [`any4hdmi/`](any4hdmi/) | Motion conversion, validation, visualization, and dataset tooling bundled in this repository. |
-| Deployment runtime | [`EGalahad/sim2real`](https://github.com/EGalahad/sim2real) | ONNX inference, MuJoCo sim2sim, Pico teleoperation, and Unitree G1 deployment. |
+| Deployment runtime | [`sim2real/`](sim2real/) ([upstream](https://github.com/EGalahad/sim2real)) | ONNX inference, MuJoCo sim2sim, Pico teleoperation, and Unitree G1 deployment. |
 
 ## Released Checkpoints
 
@@ -69,8 +69,8 @@ does not download motion data from Git or a third-party repository.
 
 ## Deployment Support
 
-The [`sim2real`](https://github.com/EGalahad/sim2real) runtime provides a modular observation interface that separates policy-specific input construction from the shared deployment runtime. Integrating a policy requires only an observation class and a YAML specification; the inference, simulator, and robot interfaces remain unchanged. This common path supports integrated MuJoCo evaluation and real-robot execution for MimicLite, HEFT, TeleopIT, Humanoid-GPT, BFM-Zero, SONIC, and TWIST2. Policy inference is decoupled from robot I/O through interchangeable MuJoCo and physical Unitree G1 backends.
+The [`sim2real/`](sim2real/) runtime provides a modular observation interface that separates policy-specific input construction from the shared deployment runtime. Integrating a policy requires only an observation class and a YAML specification; the inference, simulator, and robot interfaces remain unchanged. This common path supports integrated MuJoCo evaluation and real-robot execution for MimicLite, HEFT, TeleopIT, Humanoid-GPT, BFM-Zero, SONIC, and TWIST2. Policy inference is decoupled from robot I/O through interchangeable MuJoCo and physical Unitree G1 backends.
 
 ## License
 
-This integration repository is released under GPL-3.0-or-later. Component repositories retain their own histories and license files; verify dataset and component licenses before redistribution.
+This integration repository is released under GPL-3.0-or-later. Vendored component directories retain their upstream license files; verify dataset and component licenses before redistribution.

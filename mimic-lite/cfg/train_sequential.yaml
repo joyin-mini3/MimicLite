@@ -1,0 +1,45 @@
+hydra:
+  run:
+    dir: ./outputs/${now:%Y-%m-%d}/${now:%H-%M-%S}-train-sequential
+  job:
+    chdir: true
+
+headless: true
+exp_name: ${oc.select:task.name,test}-${oc.select:algo.name,none}
+
+backend: mjlab
+device: cuda
+
+app:
+  headless: ${..headless}
+  enable_cameras: ${..eval_render}
+
+total_frames: null
+total_iters: 4000
+eval_render: false
+checkpoint_interval: 1000
+upload_interval: 1000
+seed: 42
+checkpoint_path: null
+export_policy: false
+
+camera_follow: true
+nproc_per_node: 8
+script: projects/mimic-lite/scripts/train.py
+random_suffix_length: 8
+tag: ${task.name}
+
+wandb:
+  entity: null
+  project: ${oc.select:task.project,active_adaptation}
+  name: ${..exp_name}/${now:%m-%d}_${now:%H-%M}
+  id: null
+  job_type: train
+  mode: online
+  tags: []
+
+defaults:
+  - task: tracking-base
+  - algo: ppo_roa_train
+  - stages: normal
+  - _self_

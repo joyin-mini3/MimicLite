@@ -1,0 +1,32 @@
+hydra:
+  run:
+    dir: ./outputs/play/${now:%Y-%m-%d}/${now:%H-%M-%S}-${task.name}-${algo.name}
+
+headless: false
+
+backend: mjlab
+device: cuda
+
+app:
+  headless: ${..headless}
+  enable_cameras: false
+
+seed: 42
+checkpoint_path: null
+export_policy: false
+export_only: false
+render_seconds: 0
+
+camera_follow: true
+
+
+defaults:
+  - task: tracking-base
+  - algo: mimic_lite_ppo
+  - override /task/command/future_steps: short
+  - _self_
+
+task:
+  num_envs: 4
+  command:
+    start_from_zero: true

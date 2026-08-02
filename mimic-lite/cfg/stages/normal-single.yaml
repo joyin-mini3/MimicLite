@@ -1,0 +1,19 @@
+# @package _global_
+
+stages:
+  - name: train-single
+    overrides:
+      - +exp=ppo_roa/train-single
+      - total_iters=2000
+      - algo.entropy_decay_start=1400
+      - algo.entropy_decay_end=1600
+    load_checkpoint_from_previous: false
+  - name: adapt-single
+    overrides:
+      - +exp=ppo_roa/adapt
+    load_checkpoint_from_previous: true
+  - name: finetune-single
+    overrides:
+      - +exp=ppo_roa/finetune
+      - +task/patches=temporal_align
+    load_checkpoint_from_previous: true

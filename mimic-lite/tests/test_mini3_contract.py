@@ -1,0 +1,80 @@
+from __future__ import annotations
+
+import json
+import unittest
+from pathlib import Path
+
+import mujoco
+import yaml
+
+import active_adaptation as aa
+
+
+aa.set_backend("mjlab")
+
+from mimic_lite.assets.mini3 import (  # noqa: E402
+    MINI3_CFG,
+    MINI3_DAMPING,
+    MINI3_JOINT_NAMES,
+    MINI3_MJCF_PATH,
+    MINI3_STIFFNESS,
+)
+
+
+REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+
+
+class Mini3TrainingContractTest(unittest.TestCase):
+    def test_asset_joint_and_actuator_order(self) -> None:
+        model = mujoco.MjModel.from_xml_path(str(MINI3_MJCF_PATH))
+        hinge_joint_names = [
+            model.joint(joint_id).name
+            for joint_id in range(model.njnt)
+            if model.jnt_type[joint_id] == mujoco.mjtJoint.mjJNT_HINGE
+        ]
+        actuator_targets = [
+            model.joint(int(model.actuator_trnid[actuator_id, 0])).name
+            for actuator_id in range(model.nu)
+        ]
+        self.assertEqual(hinge_joint_names, list(MINI3_JOINT_NAMES))
+        self.assertEqual(actuator_targets, list(MINI3_JOINT_NAMES))
+        self.assertEqual(list(MINI3_CFG.init_state.joint_pos), list(MINI3_JOINT_NAMES))
+        self.assertEqual(list(MINI3_STIFFNESS), list(MINI3_JOINT_NAMES))
+        self.assertEqual(list(MINI3_DAMPING), list(MINI3_JOINT_NAMES))
+
+        entity_cfg = MINI3_CFG.mjlab()
+        self.assertTrue(entity_cfg.strict_joint_contract)
+        self.assertEqual(list(entity_cfg.init_state.joint_pos), list(MINI3_JOINT_NAMES))
+        self.assertEqual(
+            [actuator.target_names_expr[0] for actuator in entity_cfg.articulation.actuators],
+            list(MINI3_JOINT_NAMES),
+        )
+
+    def test_training_config_has_strict_action_and_timing(self) -> None:
+        task_path = REPOSITORY_ROOT / "mimic-lite" / "cfg" / "task" / "tracking-base-mini3.yaml"
+        task = yaml.safe_load(task_path.read_text(encoding="utf-8"))
+        self.assertEqual(task["robot"]["name"], "mini3-mesh")
+        self.assertEqual(task["sim"]["step_dt"], 0.02)
+        self.assertEqual(task["sim"]["mujoco_physics_dt"], 0.002)
+        self.assertEqual(
+            list(task["input"]["action"]["action_scaling"]),
+            list(MINI3_JOINT_NAMES),
+        )
+        self.assertEqual(
+            task["reward"]["loco"]["feet_air_time"]["body_names"],
+            ["left_ankle_roll_link", "right_ankle_roll_link"],
+        )
+        self.assertNotIn("body2_names", task["reward"]["loco"]["feet_air_time"])
+
+    def test_motion_manifest_matches_asset_contract(self) -> None:
+        manifest_path = REPOSITORY_ROOT / "any4hdmi" / "output" / "mini3" / "sonic" / "manifest.json"
+        if not manifest_path.is_file():
+            self.skipTest("Converted Mini3 dataset is uploaded separately")
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        self.assertEqual(float(manifest["timestep"]), 0.02)
+        self.assertEqual(int(manifest["qpos_dim"]), 28)
+        self.assertEqual(manifest["qpos_names"][7:], list(MINI3_JOINT_NAMES))
+
+
+if __name__ == "__main__":
+    unittest.main()
