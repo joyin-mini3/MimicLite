@@ -64,7 +64,11 @@ class Mini3TrainingContractTest(unittest.TestCase):
             task["reward"]["loco"]["feet_air_time"]["body_names"],
             ["left_ankle_roll_link", "right_ankle_roll_link"],
         )
-        self.assertNotIn("body2_names", task["reward"]["loco"]["feet_air_time"])
+        feet_air_time = task["reward"]["loco"]["feet_air_time"]
+        self.assertNotIn("body2_names", feet_air_time)
+        self.assertEqual(feet_air_time["height_range"], [0.03, 0.10])
+        self.assertEqual(task["reward"]["tracking"]["root_pos"]["sigma"], 0.2)
+        self.assertEqual(task["reward"]["tracking"]["body_pos"]["sigma"], 0.2)
 
     def test_motion_manifest_matches_asset_contract(self) -> None:
         manifest_path = REPOSITORY_ROOT / "any4hdmi" / "output" / "mini3" / "sonic" / "manifest.json"

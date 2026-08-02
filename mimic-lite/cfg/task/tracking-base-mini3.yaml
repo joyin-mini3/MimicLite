@@ -179,7 +179,7 @@ reward:
       body_names: ["${task.shared.reward_root_body_name}"]
       enabled: true
       weight: 0.5
-      sigma: 0.3
+      sigma: 0.2
     root_ori:
       _target_: mimic_lite.body_ori_exp
       body_names: ["${task.shared.reward_root_body_name}"]
@@ -200,7 +200,7 @@ reward:
       _target_: mimic_lite.body_pos_local_exp
       body_names: ${task.shared.tracking_body_names}
       weight: 1.0
-      sigma: 0.3
+      sigma: 0.2
     body_ori:
       _target_: mimic_lite.body_ori_local_exp
       body_names: ${task.shared.tracking_body_names}
@@ -259,8 +259,7 @@ reward:
       enabled: true
       body_names: [left_ankle_roll_link, right_ankle_roll_link]
       thres: 0.8
-      # height_range: [0.035, 0.155]
-      height_range: [0.05, 0.15]
+      height_range: [0.03, 0.10]
       time_factor_range: [0.2, 1.0]
 
     survival:           {weight: 4.0, enabled: true}
