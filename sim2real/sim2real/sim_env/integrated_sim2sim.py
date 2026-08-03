@@ -13,6 +13,7 @@ import mujoco
 import numpy as np
 import tyro
 import yaml
+from any4hdmi.utils.mini3_real_motor import Mini3RealMotorModel
 from loguru import logger
 
 from sim2real.config.robots import get_robot_cfg
@@ -765,6 +766,30 @@ class IntegratedSimRuntime:
         self.cmd_kp = np.zeros(len(self.robot_cfg.joint_names), dtype=np.float32)
         self.cmd_kd = np.zeros(len(self.robot_cfg.joint_names), dtype=np.float32)
         self.has_received_command = False
+        real_motor_cfg = self.robot_cfg.real_motor
+        self.real_motor = (
+            Mini3RealMotorModel(
+                tuple(self.robot_cfg.joint_names),
+                self.cmd_kp,
+                self.cmd_kd,
+                self.joint_effort_limit_mjc,
+                dt=self.sim_dt,
+                response_enabled=real_motor_cfg.torque_response_enabled,
+                tn_enabled=real_motor_cfg.tn_torque_limit_enabled,
+                tn_limit_after_response=real_motor_cfg.tn_limit_after_response,
+                kt_enabled=real_motor_cfg.kt_output_model_enabled,
+                response_kp=real_motor_cfg.torque_response_kp,
+                response_ki=real_motor_cfg.torque_response_ki,
+                response_plant_tau_s=real_motor_cfg.torque_response_plant_tau_s,
+                response_delay_steps=real_motor_cfg.torque_response_delay_steps,
+                ankle_motor_torque_limit=real_motor_cfg.ankle_motor_torque_limit,
+            )
+            if real_motor_cfg is not None and real_motor_cfg.enabled
+            else None
+        )
+        if self.real_motor is not None:
+            for line in self.real_motor.summary_lines():
+                logger.info("Mini3 real motor: {}", line)
 
         self.pelvis_body_id = self._resolve_body_id(self.robot_cfg.viewer_track_body_names)
         self.viewer = None
@@ -916,27 +941,40 @@ class IntegratedSimRuntime:
     def compute_torques(self) -> None:
         self.torques[:] = 0.0
         if self.has_received_command:
-            for unitree_idx, qpos_addr, qvel_addr, act_addr in zip(
-                self.joint_indices_unitree,
-                self.qpos_adrs,
-                self.qvel_adrs,
-                self.act_adrs,
-            ):
-                q_des = self.cmd_q[unitree_idx]
-                dq_des = self.cmd_dq[unitree_idx]
-                tau_ff = self.cmd_tau[unitree_idx]
-                kp = self.cmd_kp[unitree_idx]
-                kd = self.cmd_kd[unitree_idx]
-                self.torques[act_addr] = (
-                    tau_ff
-                    + kp * (q_des - self.mj_data.qpos[qpos_addr])
-                    + kd * (dq_des - self.mj_data.qvel[qvel_addr])
+            joint_pos = np.asarray(
+                [self.mj_data.qpos[address] for address in self.qpos_adrs],
+                dtype=np.float64,
+            )
+            joint_vel = np.asarray(
+                [self.mj_data.qvel[address] for address in self.qvel_adrs],
+                dtype=np.float64,
+            )
+            if self.real_motor is None:
+                joint_torque = (
+                    self.cmd_tau
+                    + self.cmd_kp * (self.cmd_q - joint_pos)
+                    + self.cmd_kd * (self.cmd_dq - joint_vel)
                 )
+            else:
+                joint_torque = self.real_motor.compute(
+                    self.cmd_q,
+                    joint_pos,
+                    joint_vel,
+                    target_vel=self.cmd_dq,
+                    effort=self.cmd_tau,
+                    kp=self.cmd_kp,
+                    kd=self.cmd_kd,
+                )
+            self.torques[self.joint_idx_in_ctrl] = joint_torque
         self.torques[self.joint_idx_in_ctrl] = np.clip(
             self.torques[self.joint_idx_in_ctrl],
             -self.joint_effort_limit_mjc,
             self.joint_effort_limit_mjc,
         )
+
+    def reset_motor_state(self) -> None:
+        if self.real_motor is not None:
+            self.real_motor.reset()
 
     def sim_step(self) -> None:
         self.compute_torques()
@@ -1024,6 +1062,7 @@ class IntegratedSim2Sim:
     def _set_robot_to_motion_frame(self, frame: int) -> None:
         motion_data = self._motion_frame(frame)
         state_processor = self.state_processor
+        self.sim.reset_motor_state()
 
         root_body_name = str(
             self.policy.policy_config.get("motion", {}).get("root_body_name", "pelvis")

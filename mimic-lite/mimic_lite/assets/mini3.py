@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 import mujoco
+from any4hdmi.utils.mini3_real_motor import mini3_motor_type
 
 import active_adaptation.utils.symmetry as symmetry_utils
 from active_adaptation.assets.asset_cfg import (
@@ -158,8 +161,65 @@ MINI3_FRICTION = {
 }
 
 
-def _actuator(joint_name: str) -> ActuatorCfg:
-    return ActuatorCfg(
+@dataclass(kw_only=True, frozen=True)
+class Mini3RealMotorAssetCfg(ActuatorCfg):
+    """Backend-neutral wrapper for the MJLab Mini3 real-motor actuator."""
+
+    motor_type: Literal["4340p", "4310p"]
+    parallel_ankle_side: Literal["left", "right"] | None = None
+    stiffness_by_joint: dict[str, float] | None = None
+    damping_by_joint: dict[str, float] | None = None
+    torque_response_enabled: bool = True
+    torque_response_kp: float = 0.0
+    torque_response_ki: float = 90.6769527429
+    torque_response_plant_tau_s: float = 0.00393417593548
+    torque_response_delay_steps: float = 1.0
+    tn_torque_limit_enabled: bool = True
+    tn_limit_after_response: bool = True
+    kt_output_model_enabled: bool = True
+    ankle_motor_torque_limit: float = 12.5
+
+    def mjlab(self):
+        from mimic_lite.assets.mini3_real_motor import (
+            Mini3ParallelAnkleRealMotorActuatorCfg,
+            Mini3RealMotorActuatorCfg,
+        )
+
+        target_names_expr = (
+            tuple(self.joint_names_expr)
+            if isinstance(self.joint_names_expr, list)
+            else (self.joint_names_expr,)
+        )
+        kwargs = {
+            "target_names_expr": target_names_expr,
+            "effort_limit": float(self.effort_limit),
+            "stiffness": float(self.stiffness),
+            "damping": float(self.damping),
+            "frictionloss": float(self.friction),
+            "armature": float(self.armature),
+            "motor_type": self.motor_type,
+            "stiffness_by_joint": self.stiffness_by_joint,
+            "damping_by_joint": self.damping_by_joint,
+            "torque_response_enabled": self.torque_response_enabled,
+            "torque_response_kp": self.torque_response_kp,
+            "torque_response_ki": self.torque_response_ki,
+            "torque_response_plant_tau_s": self.torque_response_plant_tau_s,
+            "torque_response_delay_steps": self.torque_response_delay_steps,
+            "tn_torque_limit_enabled": self.tn_torque_limit_enabled,
+            "tn_limit_after_response": self.tn_limit_after_response,
+            "kt_output_model_enabled": self.kt_output_model_enabled,
+        }
+        if self.parallel_ankle_side is None:
+            return Mini3RealMotorActuatorCfg(**kwargs)
+        return Mini3ParallelAnkleRealMotorActuatorCfg(
+            **kwargs,
+            side=self.parallel_ankle_side,
+            ankle_motor_torque_limit=self.ankle_motor_torque_limit,
+        )
+
+
+def _serial_real_motor_actuator(joint_name: str) -> Mini3RealMotorAssetCfg:
+    return Mini3RealMotorAssetCfg(
         joint_names_expr=joint_name,
         effort_limit=MINI3_EFFORT_LIMIT[joint_name],
         velocity_limit=MINI3_VELOCITY_LIMIT[joint_name],
@@ -167,7 +227,52 @@ def _actuator(joint_name: str) -> ActuatorCfg:
         damping=MINI3_DAMPING[joint_name],
         friction=MINI3_FRICTION[joint_name],
         armature=MINI3_ARMATURE[joint_name],
+        motor_type=mini3_motor_type(joint_name),
     )
+
+
+def _parallel_ankle_actuator(
+    side: Literal["left", "right"],
+) -> Mini3RealMotorAssetCfg:
+    joint_names = [
+        f"{side}_ankle_pitch_joint",
+        f"{side}_ankle_roll_joint",
+    ]
+    return Mini3RealMotorAssetCfg(
+        joint_names_expr=joint_names,
+        # This is the serial-coordinate force range. Each physical 4310P is
+        # limited separately to 12.5 Nm before J.T maps back to the joint pair.
+        effort_limit=25.0,
+        velocity_limit=45.0,
+        stiffness=MINI3_STIFFNESS[joint_names[0]],
+        damping=MINI3_DAMPING[joint_names[0]],
+        friction=0.7,
+        armature=0.01,
+        motor_type="4310p",
+        parallel_ankle_side=side,
+        stiffness_by_joint={name: MINI3_STIFFNESS[name] for name in joint_names},
+        damping_by_joint={name: MINI3_DAMPING[name] for name in joint_names},
+        ankle_motor_torque_limit=12.5,
+    )
+
+
+def _real_motor_actuators() -> dict[str, Mini3RealMotorAssetCfg]:
+    """Build groups whose flattened target order is the 21-joint contract."""
+
+    actuators: dict[str, Mini3RealMotorAssetCfg] = {}
+    skip = set()
+    for joint_name in MINI3_JOINT_NAMES:
+        if joint_name in skip:
+            continue
+        if joint_name == "left_ankle_pitch_joint":
+            actuators["left_parallel_ankle"] = _parallel_ankle_actuator("left")
+            skip.add("left_ankle_roll_joint")
+        elif joint_name == "right_ankle_pitch_joint":
+            actuators["right_parallel_ankle"] = _parallel_ankle_actuator("right")
+            skip.add("right_ankle_roll_joint")
+        else:
+            actuators[joint_name] = _serial_real_motor_actuator(joint_name)
+    return actuators
 
 
 def _validate_source_contract() -> None:
@@ -231,7 +336,8 @@ MINI3_CFG = AssetCfg(
     usd_path=MINI3_URDF_PATH,
     init_state=MINI3_INIT_STATE,
     self_collisions=True,
-    actuators={name: _actuator(name) for name in MINI3_JOINT_NAMES},
+    actuators=_real_motor_actuators(),
+    mjlab_remove_xml_actuators=True,
     sensors_mjlab=[
         ContactSensorCfg(
             name="contact_forces",

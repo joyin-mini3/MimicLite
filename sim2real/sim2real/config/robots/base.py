@@ -38,6 +38,22 @@ UNITREE_HG_DDS_ROBOT_NAMES = frozenset(
 
 
 @dataclass(frozen=True)
+class RealMotorCfg:
+    """Optional calibrated motor chain used by pure MuJoCo Sim2Sim."""
+
+    enabled: bool = False
+    torque_response_enabled: bool = True
+    torque_response_kp: float = 0.0
+    torque_response_ki: float = 90.6769527429
+    torque_response_plant_tau_s: float = 0.00393417593548
+    torque_response_delay_steps: float = 1.0
+    tn_torque_limit_enabled: bool = True
+    tn_limit_after_response: bool = True
+    kt_output_model_enabled: bool = True
+    ankle_motor_torque_limit: float = 12.5
+
+
+@dataclass(frozen=True)
 class RobotCfg:
     name: str
     joint_names: tuple[str, ...]
@@ -68,6 +84,7 @@ class RobotCfg:
     viewer_track_body_names: tuple[str, ...] = ("pelvis",)
     elastic_band_attach_body_names: tuple[str, ...] = ("torso_link", "base_link")
     strict_joint_contract: bool = False
+    real_motor: RealMotorCfg | None = None
 
     def __post_init__(self) -> None:
         if not self.strict_joint_contract:

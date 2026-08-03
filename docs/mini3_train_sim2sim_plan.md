@@ -134,13 +134,15 @@ Mini3 启用严格模式：21 个 joint 名称必须唯一；`default_joint_pos`
 | 动作配置 | `mimic-lite/cfg/task/motion/mini3/` | any4hdmi manifest 与 motion source |
 | 仿真后端 | `active-adaptation/.../mjlab/env.py` | 可配置 MuJoCo physics dt |
 | 数据工具 | `any4hdmi/src/any4hdmi/scripts/preprocess/` | Mini3 flat PKL 到 NPZ qpos 转换与严格校验 |
+| 电机公共模型 | `any4hdmi/src/any4hdmi/utils/mini3_real_motor.py` | 4340P/4310P T-N、当前环响应、KT 查表和并联踝 J/J.T |
+| 训练 actuator | `mimic-lite/mimic_lite/assets/mini3_real_motor.py` | 在 500 Hz MJLab physics substep 推进有状态 real-motor 链路 |
 | 策略导出 | `mimic-lite/scripts/play.py` | 输出完整 ONNX、观测和评测语义 YAML |
 | 部署配置 | `sim2real/sim2real/config/robots/mini3.py` | Mini3 `RobotCfg` 与注册 |
 | 集成仿真 | `sim2real/.../integrated_sim2sim.py`、`rl_policy/observations/common.py` | 去除 G1 tracking 假设、按 actuator target joint 映射、严格检查、对齐 history reset |
 | 批量评测 | `sim2real/scripts/tracking_experiment/run_tracking_metrics_eval.py` | 透传 env/sim dt |
 | 测试 | 各组件 `tests/` | schema、order、observation parity、单步推理、smoke sim |
 
-首版 actuator 使用训练与 Sim2Sim 一致的线性 position-PD。速度限位在当前 MJLab/集成 Sim2Sim 链路中不自动执行，只做显式监测和报告；UFO 的非线性电机响应、KT 查表和并联踝映射列为后续 fidelity 阶段，不作为首版训练链路前置条件，也不能据此宣称已具备真机迁移能力。
+Mini3 训练和集成 Sim2Sim 默认使用同一个 real-motor 参数源：position-PD 后依次执行物理电机空间 T-N 限制、当前环/一阶响应、响应后 T-N 限制和 KT 输出查表；左右并联踝先经 J 映射到 4310P 电机空间，输出再经 J.T 返回串联关节坐标。该状态每个 0.002 s physics substep 更新并在环境 reset 时清零。速度限位仍不作为 actuator 硬裁剪，只做显式监测和报告；当前常数来自 UFO/mini3_lab 参考值，仍须用实际硬件版本的测量结果确认，不能据此宣称已具备真机迁移能力。
 
 ## 5. 执行命令模板
 
@@ -273,16 +275,17 @@ uv run python scripts/tracking_experiment/run_tracking_metrics_eval.py \
 | Environment | 服务器全部训练 GPU 均识别为 RTX 4090/SM89；CUDA tensor、Warp、MJLab、单卡 1-env 和最小 DDP 测试通过 |
 | Asset | MJCF 与 `usd_path` 资产可解析；模型加载后 `nq/nv/nu=28/27/21`；21 joint 与 actuator target 一一对应；有 collision geom 的非相邻自碰撞开启且相邻 pair 排除生效 |
 | Motion | flat PKL 按固定 21 列契约转换为 NPZ；qpos 为 `T x 28`、50 Hz、有限值；qpos/joint names 严格一致；MuJoCo-aware 重采样、四元数和限位检查通过；frame 0 可稳定站立 |
-| Train | 64-env smoke 无 NaN；checkpoint 可 play；实际 500 Hz physics/50 Hz policy；`feet_air_time` 只依赖左右 ankle-roll link；输出每关节最大/p99 速度及超限比例 |
+| Train | 64-env smoke 无 NaN；checkpoint 可 play；实际 500 Hz physics/50 Hz policy；real-motor 状态按 physics substep 推进且 reset 清零；`feet_air_time` 只依赖左右 ankle-roll link；输出每关节最大/p99 速度及超限比例 |
 | Export | 一个静态无 batch 的完整 ONNX；输入与 YAML 顺序一致；输出严格为 `[21]`；21 joint 的 default pose/Kp/Kd/action scale 完整且唯一 |
 | Parity | 固定状态、reset 第一帧及连续运行至少 16 帧时，训练端/集成 Sim2Sim 端各 observation 分量均通过容差检查 |
 | Sim2Sim | seed 0 从 frame 0 运行至末帧并保持；无缺失映射/越界/NaN；trajectory 与 metrics 文件完整 |
 
 完成定义是：根仓库直接包含 any4hdmi 源码和 Mini3 资产，转换后的 `any4hdmi/output/` 数据不进入 Git并单独上传；服务器 RTX 4090 环境通过 preflight，至少一个 Mini3 flat PKL 动作能按固定 21 列契约转换为严格 NPZ contract，并依次通过数据校验、训练 smoke、checkpoint 导出、静态无 batch ONNX 单步推理、observation reset parity 和 seed 0 集成 Sim2Sim；正式训练策略在固定 seed 0 的批量动作集上得到可复现结果，且每次实验记录代码 commit、完整命令、Hydra 配置、seed、模型/数据哈希、速度限位报告和跟踪指标。未经许可证审查的 UFO 资产、未经测量确认的电机参数，以及真机部署均保留为显式未完成项。
 
-## 7. 当前实施结果（2026-08-02）
+## 7. 当前实施结果（2026-08-03）
 
 - 已完成 Mini3 训练资产、21 关节严格模式、任务/动作配置、500 Hz MuJoCo physics、ankle-roll `feet_air_time` 和自碰撞配置。
 - 已完成部署 YAML 扩展、静态无 batch ONNX 输出校验、Mini3 RobotCfg、按 actuator transmission target joint 映射、history reset 对齐和关节速度统计报告。
+- 已完成训练/Sim2Sim 共用的 Mini3 real-motor 参数模型、MJLab 显式力矩 actuator、左右并联踝映射、reset 状态清零及显式 actuator Kp/Kd 随机化；Mini3 Sim2Sim 默认开启，G1 不受影响。
 - 本地已通过 Hydra 正式 PPO 配置展开、Mini3 contract 单元测试，以及 MuJoCo `nq/nv/nu=28/27/21`、21 actuator target、23 个相邻碰撞排除和全部 `sim2real` 单元测试。
 - 用户已在本地完成 Mini3 全量数据转换；本次代码实施没有重新启动转换，也没有启动训练。仍需在服务器 RTX 4090 上完成 1-env、64-env/10-iteration、最小 DDP、正式训练、真实 checkpoint 导出和策略驱动的 Sim2Sim。这些结果依赖训练 GPU 和生成的 checkpoint，不能由纯 CPU 测试替代。

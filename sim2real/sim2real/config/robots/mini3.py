@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sim2real.config.robots.base import PROJECT_ROOT, RobotCfg
+from sim2real.config.robots.base import PROJECT_ROOT, RealMotorCfg, RobotCfg
 
 
 MINI3_JOINT_NAMES = (
@@ -136,4 +136,16 @@ MINI3_CFG = RobotCfg(
     viewer_track_body_names=("base_link",),
     elastic_band_attach_body_names=("waist_yaw_link", "base_link"),
     strict_joint_contract=True,
+    real_motor=RealMotorCfg(
+        enabled=True,
+        torque_response_enabled=True,
+        torque_response_kp=0.0,
+        torque_response_ki=90.6769527429,
+        torque_response_plant_tau_s=0.00393417593548,
+        torque_response_delay_steps=1.0,
+        tn_torque_limit_enabled=True,
+        tn_limit_after_response=True,
+        kt_output_model_enabled=True,
+        ankle_motor_torque_limit=12.5,
+    ),
 )

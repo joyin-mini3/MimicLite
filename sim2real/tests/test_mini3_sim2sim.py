@@ -14,6 +14,7 @@ from sim2real.rl_policy.observations.common import (
     root_ang_vel_history,
 )
 from sim2real.sim_env.utils.mjcf import load_sim_model
+from sim2real.sim_env.integrated_sim2sim import IntegratedSimRuntime
 
 
 class _State:
@@ -53,6 +54,36 @@ class Mini3Sim2SimTest(unittest.TestCase):
         self.assertEqual(actuator_targets, list(cfg.joint_names))
         self.assertEqual(body_names, list(cfg.body_names))
         self.assertTrue(all(model.actuator(i).name.endswith("_ctrl") for i in range(model.nu)))
+        self.assertIsNotNone(cfg.real_motor)
+        self.assertTrue(cfg.real_motor.enabled)
+
+    def test_integrated_runtime_enables_stateful_real_motor(self) -> None:
+        cfg = get_robot_cfg("mini3")
+        runtime = IntegratedSimRuntime(
+            cfg,
+            sim_dt=0.002,
+            headless=True,
+            key_callback=None,
+        )
+        self.assertIsNotNone(runtime.real_motor)
+        target = np.zeros(len(cfg.joint_names), dtype=np.float32)
+        target[0] = 1.0
+        kp = np.full(len(cfg.joint_names), 20.0, dtype=np.float32)
+        kd = np.ones(len(cfg.joint_names), dtype=np.float32)
+        runtime.apply_command(
+            target,
+            np.zeros_like(target),
+            np.zeros_like(target),
+            kp,
+            kd,
+        )
+        runtime.compute_torques()
+        applied = runtime.torques[runtime.joint_idx_in_ctrl]
+        self.assertGreater(float(applied[0]), 0.0)
+        self.assertLess(float(applied[0]), 20.0)
+        np.testing.assert_allclose(applied[4:6], 0.0, atol=1e-7)
+        runtime.reset_motor_state()
+        np.testing.assert_allclose(runtime.real_motor.applied_torque, 0.0)
 
     def test_self_collision_keeps_adjacent_excludes(self) -> None:
         cfg = get_robot_cfg("mini3")

@@ -10,7 +10,13 @@ import yaml
 import active_adaptation as aa
 
 
-aa.set_backend("mjlab")
+try:
+    _backend = aa.get_backend()
+except RuntimeError:
+    aa.set_backend("mjlab")
+else:
+    if _backend != "mjlab":
+        raise RuntimeError(f"Mini3 contract tests require mjlab, got {_backend}")
 
 from mimic_lite.assets.mini3 import (  # noqa: E402
     MINI3_CFG,
@@ -46,9 +52,33 @@ class Mini3TrainingContractTest(unittest.TestCase):
         self.assertTrue(entity_cfg.strict_joint_contract)
         self.assertEqual(list(entity_cfg.init_state.joint_pos), list(MINI3_JOINT_NAMES))
         self.assertEqual(
-            [actuator.target_names_expr[0] for actuator in entity_cfg.articulation.actuators],
+            [
+                name
+                for actuator in entity_cfg.articulation.actuators
+                for name in actuator.target_names_expr
+            ],
             list(MINI3_JOINT_NAMES),
         )
+        actuator_types = {
+            type(actuator).__name__
+            for actuator in entity_cfg.articulation.actuators
+        }
+        self.assertEqual(
+            actuator_types,
+            {
+                "Mini3RealMotorActuatorCfg",
+                "Mini3ParallelAnkleRealMotorActuatorCfg",
+            },
+        )
+        training_model = entity_cfg.build().spec.compile()
+        self.assertEqual(training_model.nu, 21)
+        training_targets = [
+            training_model.joint(
+                int(training_model.actuator_trnid[actuator_id, 0])
+            ).name
+            for actuator_id in range(training_model.nu)
+        ]
+        self.assertEqual(training_targets, list(MINI3_JOINT_NAMES))
 
     def test_training_config_has_strict_action_and_timing(self) -> None:
         task_path = REPOSITORY_ROOT / "mimic-lite" / "cfg" / "task" / "tracking-base-mini3.yaml"

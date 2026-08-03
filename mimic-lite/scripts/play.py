@@ -73,14 +73,24 @@ def _get_asset_meta(asset) -> dict:
         )
         stiffness = getattr(acfg, "stiffness", None)
         damping = getattr(acfg, "damping", None)
+        stiffness_by_joint = getattr(acfg, "stiffness_by_joint", None)
+        damping_by_joint = getattr(acfg, "damping_by_joint", None)
 
         if isinstance(names, str):
             names = [names]
         for joint_name in names:
             meta["actuator_joint_names"].append(joint_name)
-            if stiffness is not None:
+            if stiffness_by_joint is not None:
+                meta["joint_kp"][joint_name] = float(
+                    stiffness_by_joint[joint_name]
+                )
+            elif stiffness is not None:
                 meta["joint_kp"][joint_name] = float(stiffness)
-            if damping is not None:
+            if damping_by_joint is not None:
+                meta["joint_kd"][joint_name] = float(
+                    damping_by_joint[joint_name]
+                )
+            elif damping is not None:
                 meta["joint_kd"][joint_name] = float(damping)
 
     return meta
