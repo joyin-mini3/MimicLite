@@ -338,7 +338,9 @@ randomization:
     armature_range:
       .*: [0.75, 1.25]
     friction_range:
-      .*: [0.05, 0.25]
+      ".*(hip|knee|waist).*": [0.736617, 1.368004]
+      ".*ankle.*": [0.35, 1.40]
+      ".*(shoulder|elbow).*": [0.49, 0.91]
 
 
   # reset
