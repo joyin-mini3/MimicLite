@@ -248,6 +248,19 @@ def _compute_motion_local_obs(
 
 
 @torch.compile(mode="max-autotune-no-cudagraphs")
+def _compute_ref_root_lin_vel_future_local(
+    ref_root_quat_w: torch.Tensor,
+    ref_root_lin_vel_future_w: torch.Tensor,
+):
+    """Express future reference-root velocity in the current reference yaw frame."""
+    ref_root_yaw_quat_w = projected_yaw_quat(ref_root_quat_w)[:, None, :]
+    return quat_apply_inverse(
+        ref_root_yaw_quat_w,
+        ref_root_lin_vel_future_w,
+    )
+
+
+@torch.compile(mode="max-autotune-no-cudagraphs")
 def _compute_body_diff_obs(
     # anchor pose
     ref_anchor_pos_w: torch.Tensor,
@@ -891,6 +904,15 @@ class RobotTracking(Command, namespace="mimic_lite"):
         self.ref_root_quat_future_w = self.future_ref_motion.body_quat_w[
             ..., self.root_body_idx_motion, :
         ]
+        self.ref_root_lin_vel_future_w = self.future_ref_motion.body_lin_vel_w[
+            ..., self.root_body_idx_motion, :
+        ]
+        self.ref_root_lin_vel_future_local = (
+            _compute_ref_root_lin_vel_future_local(
+                self.ref_root_quat_future_w[:, self.obs_current_step_index],
+                self.ref_root_lin_vel_future_w,
+            )
+        )
 
         self.ref_anchor_pos_future_w = (
             self.future_ref_motion.body_pos_w[..., self.anchor_body_idx_motion, :]

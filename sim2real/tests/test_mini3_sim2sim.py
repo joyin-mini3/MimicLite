@@ -13,6 +13,8 @@ from sim2real.rl_policy.observations.common import (
     projected_gravity_history,
     root_ang_vel_history,
 )
+from sim2real.rl_policy.observations.track import ref_root_lin_vel_future_local
+from sim2real.rl_policy.utils.motion import MotionData
 from sim2real.sim_env.utils.mjcf import load_sim_model
 from sim2real.sim_env.integrated_sim2sim import IntegratedSimRuntime
 
@@ -33,7 +35,53 @@ class _Env:
         self.num_actions = 2
 
 
+class _MotionState:
+    def __init__(self) -> None:
+        half_sqrt_two = np.float32(2.0**-0.5)
+        self.motion_config = {
+            "future_steps": [0, 1],
+            "joint_names": ["waist_yaw_joint"],
+            "body_names": ["base_link"],
+            "root_body_name": "base_link",
+            "anchor_body_name": "base_link",
+        }
+        self.motion_joint_names = ["waist_yaw_joint"]
+        self.motion_body_names = ["base_link"]
+        self.motion_data = MotionData(
+            joint_pos=np.zeros((1, 2, 1), dtype=np.float32),
+            body_pos_w=np.zeros((1, 2, 1, 3), dtype=np.float32),
+            body_quat_w=np.asarray(
+                [[
+                    [[half_sqrt_two, 0.0, 0.0, half_sqrt_two]],
+                    [[half_sqrt_two, 0.0, 0.0, half_sqrt_two]],
+                ]],
+                dtype=np.float32,
+            ),
+            body_lin_vel_w=np.asarray(
+                [[[[0.0, 1.0, 0.25]], [[-1.0, 0.0, -0.5]]]],
+                dtype=np.float32,
+            ),
+        )
+
+
+class _MotionEnv:
+    def __init__(self) -> None:
+        self.state_processor = _MotionState()
+        self.joint_names_simulation = ["waist_yaw_joint"]
+        self.body_names_simulation = ["base_link"]
+
+
 class Mini3Sim2SimTest(unittest.TestCase):
+    def test_reference_root_velocity_matches_training_yaw_frame(self) -> None:
+        observation = ref_root_lin_vel_future_local(env=_MotionEnv())
+        observation.update({})
+
+        np.testing.assert_allclose(
+            observation.compute(),
+            np.asarray([1.0, 0.0, 0.25, 0.0, 1.0, -0.5], dtype=np.float32),
+            atol=1.0e-6,
+        )
+
     def test_model_and_actuator_transmission_contract(self) -> None:
         cfg = get_robot_cfg("mini3")
         model = load_sim_model(cfg)

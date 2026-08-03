@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 
 import mujoco
+import torch
 import yaml
 
 import active_adaptation as aa
@@ -24,6 +25,9 @@ from mimic_lite.assets.mini3 import (  # noqa: E402
     MINI3_JOINT_NAMES,
     MINI3_MJCF_PATH,
     MINI3_STIFFNESS,
+)
+from mimic_lite.tasks.command import (  # noqa: E402
+    _compute_ref_root_lin_vel_future_local,
 )
 
 
@@ -99,6 +103,40 @@ class Mini3TrainingContractTest(unittest.TestCase):
         self.assertEqual(feet_air_time["height_range"], [0.03, 0.10])
         self.assertEqual(task["reward"]["tracking"]["root_pos"]["sigma"], 0.2)
         self.assertEqual(task["reward"]["tracking"]["body_pos"]["sigma"], 0.2)
+        self.assertEqual(task["shared"]["root_body_name"], "base_link")
+        for group_name in ("command", "command_short"):
+            self.assertEqual(
+                task["observation"][group_name][
+                    "ref_root_lin_vel_future_local"
+                ]["_target_"],
+                "mimic_lite.ref_root_lin_vel_future_local",
+            )
+
+    def test_reference_root_velocity_uses_current_reference_yaw(self) -> None:
+        half_sqrt_two = 2.0**-0.5
+        current_root_quat_w = torch.tensor(
+            [[half_sqrt_two, 0.0, 0.0, half_sqrt_two]],
+            dtype=torch.float32,
+        )
+        future_velocity_w = torch.tensor(
+            [[[0.0, 1.0, 0.25], [-1.0, 0.0, -0.5]]],
+            dtype=torch.float32,
+        )
+
+        velocity_local = _compute_ref_root_lin_vel_future_local(
+            current_root_quat_w,
+            future_velocity_w,
+        )
+
+        torch.testing.assert_close(
+            velocity_local,
+            torch.tensor(
+                [[[1.0, 0.0, 0.25], [0.0, 1.0, -0.5]]],
+                dtype=torch.float32,
+            ),
+            atol=1.0e-6,
+            rtol=1.0e-6,
+        )
 
     def test_motion_manifest_matches_asset_contract(self) -> None:
         manifest_path = REPOSITORY_ROOT / "any4hdmi" / "output" / "mini3" / "sonic" / "manifest.json"

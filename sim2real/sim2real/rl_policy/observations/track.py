@@ -290,3 +290,27 @@ class ref_root_ori_future_b(_motion_obs):
     
     def compute(self):
         return self.ref_root_ori_future_b[:, :, :2, :3].reshape(-1)
+
+
+class ref_root_lin_vel_future_local(_motion_obs):
+    """Reference-root velocity in the current reference-root yaw frame."""
+
+    def update(self, data: Dict[str, Any]) -> None:
+        super().update(data)
+        ref_root_lin_vel_future_w = self._select(
+            self.state_processor.motion_data.body_lin_vel_w[
+                :, :, self._root_body_idx, :
+            ]
+        )
+        ref_root_yaw_quat_w = projected_yaw_quat(self.ref_root_quat_w)[:, None, :]
+        ref_root_yaw_quat_w = np.broadcast_to(
+            ref_root_yaw_quat_w,
+            (*ref_root_lin_vel_future_w.shape[:-1], 4),
+        )
+        self.ref_root_lin_vel_future_local = quat_rotate_inverse_numpy(
+            ref_root_yaw_quat_w,
+            ref_root_lin_vel_future_w,
+        )
+
+    def compute(self):
+        return self.ref_root_lin_vel_future_local.reshape(-1)

@@ -140,6 +140,27 @@ class ref_root_ori_future_b(_tracking_future_step_observation, namespace="mimic_
         return ref_root_ori_future_b[:, :, :2, :].reshape(self.num_envs, -1)
 
 
+class ref_root_lin_vel_future_local(
+    _tracking_future_step_observation, namespace="mimic_lite"
+):
+    """Reference-root linear velocity in the current reference yaw frame."""
+
+    def __init__(self, env, noise_std=0.0, **kwargs):
+        super().__init__(env, **kwargs)
+        self.noise_std = noise_std
+
+    def compute(self):
+        ref_root_lin_vel_future_local = self._select_future_steps(
+            self.command_manager.ref_root_lin_vel_future_local
+        ).reshape(self.num_envs, -1)
+        if self.noise_std > 0.0:
+            ref_root_lin_vel_future_local += (
+                torch.randn_like(ref_root_lin_vel_future_local).clamp(-3.0, 3.0)
+                * self.noise_std
+            )
+        return ref_root_lin_vel_future_local
+
+
 # motion_local_obs
 
 class _tracking_body_future_observation(TrackObservation):

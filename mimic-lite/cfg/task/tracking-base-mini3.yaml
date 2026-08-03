@@ -145,6 +145,12 @@ command:
   rewind_steps_range: [25, 125]
 
 observation:
+  command:
+    ref_root_lin_vel_future_local:
+      _target_: mimic_lite.ref_root_lin_vel_future_local
+  command_short:
+    ref_root_lin_vel_future_local:
+      _target_: mimic_lite.ref_root_lin_vel_future_local
   policy:
     root_ang_vel_history:
       _target_: mimic_lite.root_ang_vel_history
