@@ -18,6 +18,7 @@ if active_adaptation.get_backend() == "isaaclab":
     from isaaclab.actuators import DCMotor, ImplicitActuator
 elif active_adaptation.get_backend() == "mjlab":
     import mujoco_warp
+    from mjlab.actuator import BuiltinPositionActuator, IdealPdActuator
     from mjlab.managers.event_manager import RecomputeLevel
 
     _MJLAB_RECOMPUTE_DERIVED_FIELDS = {
@@ -241,40 +242,84 @@ class motor_params_implicit(Randomization):
         )
         _mjlab_ensure_recompute_fields_expanded(self.env, RecomputeLevel.set_const_0)
         self.model = self.env.sim.model
+        self.explicit_pd_actuators = [
+            actuator
+            for actuator in self.asset.actuators
+            if isinstance(actuator, IdealPdActuator)
+            and not isinstance(actuator, BuiltinPositionActuator)
+        ]
+        if self.explicit_pd_actuators and len(self.explicit_pd_actuators) != len(
+            self.asset.actuators
+        ):
+            raise ValueError(
+                "motor_params_implicit does not support mixing built-in and "
+                "explicit-PD MJLab actuators"
+            )
+        self.uses_explicit_pd = bool(self.explicit_pd_actuators)
 
         if self.stiffness_range is not None:
-            kp_ids, _, kp_ranges = string_utils.resolve_matching_names_values(
-                self.stiffness_range, self.asset.actuator_names
+            kp_ids, kp_names, kp_ranges = string_utils.resolve_matching_names_values(
+                self.stiffness_range,
+                self.asset.joint_names
+                if self.uses_explicit_pd
+                else self.asset.actuator_names,
             )
-            self.kp_ctrl_ids = self.asset.indexing.ctrl_ids[
-                torch.tensor(kp_ids, device=self.device, dtype=torch.long)
-            ]
-            default_gainprm = self.env.sim.get_default_field("actuator_gainprm")
-            default_biasprm = self.env.sim.get_default_field("actuator_biasprm")
-            self.kp_gain_def = default_gainprm[self.kp_ctrl_ids, 0]
-            self.kp_bias_def = default_biasprm[self.kp_ctrl_ids, 1]
             kp_low, kp_high = torch.tensor(kp_ranges, device=self.device).unbind(1)
             self._validate_log_uniform_range("stiffness_range", kp_low, kp_high)
-            self.kp_low = kp_low
-            self.kp_high = kp_high
+            if self.uses_explicit_pd:
+                self.kp_factor_range = {
+                    name: (float(low), float(high))
+                    for name, low, high in zip(
+                        kp_names, kp_low.tolist(), kp_high.tolist(), strict=True
+                    )
+                }
+                self.kp_ctrl_ids = torch.empty(
+                    0, device=self.device, dtype=torch.long
+                )
+            else:
+                self.kp_ctrl_ids = self.asset.indexing.ctrl_ids[
+                    torch.tensor(kp_ids, device=self.device, dtype=torch.long)
+                ]
+                default_gainprm = self.env.sim.get_default_field("actuator_gainprm")
+                default_biasprm = self.env.sim.get_default_field("actuator_biasprm")
+                self.kp_gain_def = default_gainprm[self.kp_ctrl_ids, 0]
+                self.kp_bias_def = default_biasprm[self.kp_ctrl_ids, 1]
+                self.kp_low = kp_low
+                self.kp_high = kp_high
         else:
             self.kp_ctrl_ids = torch.empty(0, device=self.device, dtype=torch.long)
+            self.kp_factor_range = {}
 
         if self.damping_range is not None:
-            kd_ids, _, kd_ranges = string_utils.resolve_matching_names_values(
-                self.damping_range, self.asset.actuator_names
+            kd_ids, kd_names, kd_ranges = string_utils.resolve_matching_names_values(
+                self.damping_range,
+                self.asset.joint_names
+                if self.uses_explicit_pd
+                else self.asset.actuator_names,
             )
-            self.kd_ctrl_ids = self.asset.indexing.ctrl_ids[
-                torch.tensor(kd_ids, device=self.device, dtype=torch.long)
-            ]
-            default_biasprm = self.env.sim.get_default_field("actuator_biasprm")
-            self.kd_bias_def = default_biasprm[self.kd_ctrl_ids, 2]
             kd_low, kd_high = torch.tensor(kd_ranges, device=self.device).unbind(1)
             self._validate_log_uniform_range("damping_range", kd_low, kd_high)
-            self.kd_low = kd_low
-            self.kd_high = kd_high
+            if self.uses_explicit_pd:
+                self.kd_factor_range = {
+                    name: (float(low), float(high))
+                    for name, low, high in zip(
+                        kd_names, kd_low.tolist(), kd_high.tolist(), strict=True
+                    )
+                }
+                self.kd_ctrl_ids = torch.empty(
+                    0, device=self.device, dtype=torch.long
+                )
+            else:
+                self.kd_ctrl_ids = self.asset.indexing.ctrl_ids[
+                    torch.tensor(kd_ids, device=self.device, dtype=torch.long)
+                ]
+                default_biasprm = self.env.sim.get_default_field("actuator_biasprm")
+                self.kd_bias_def = default_biasprm[self.kd_ctrl_ids, 2]
+                self.kd_low = kd_low
+                self.kd_high = kd_high
         else:
             self.kd_ctrl_ids = torch.empty(0, device=self.device, dtype=torch.long)
+            self.kd_factor_range = {}
 
         if self.armature_range is not None:
             arm_ids, _, arm_ranges = string_utils.resolve_matching_names_values(
@@ -358,7 +403,9 @@ class motor_params_implicit(Randomization):
 
         if self.env.backend == "mjlab":
             n_env = env_ids.numel()
-            if self.kp_ctrl_ids.numel() > 0:
+            if self.uses_explicit_pd:
+                self._reset_explicit_pd(env_ids)
+            elif self.kp_ctrl_ids.numel() > 0:
                 kp_samples = self._rand_log_uniform(n_env, self.kp_low, self.kp_high)
                 kp_gain = self.kp_gain_def.unsqueeze(0) * kp_samples
                 kp_bias = self.kp_bias_def.unsqueeze(0) * kp_samples
@@ -397,6 +444,54 @@ class motor_params_implicit(Randomization):
                 self.asset.write_joint_friction_coefficient_to_sim(
                     friction, joint_ids=self.friction_id, env_ids=env_ids
                 )
+
+    def _reset_explicit_pd(self, env_ids: torch.Tensor) -> None:
+        """Randomize gains held by MJLab explicit-PD actuator tensors."""
+
+        n_env = int(env_ids.numel())
+        for actuator in self.explicit_pd_actuators:
+            assert actuator.default_stiffness is not None
+            assert actuator.default_damping is not None
+            stiffness = actuator.default_stiffness[env_ids].clone()
+            damping = actuator.default_damping[env_ids].clone()
+
+            kp_local_ids = [
+                index
+                for index, name in enumerate(actuator.target_names)
+                if name in self.kp_factor_range
+            ]
+            if kp_local_ids:
+                ranges = torch.tensor(
+                    [
+                        self.kp_factor_range[actuator.target_names[index]]
+                        for index in kp_local_ids
+                    ],
+                    device=self.device,
+                )
+                low, high = ranges.unbind(1)
+                stiffness[:, kp_local_ids] *= self._rand_log_uniform(
+                    n_env, low, high
+                )
+
+            kd_local_ids = [
+                index
+                for index, name in enumerate(actuator.target_names)
+                if name in self.kd_factor_range
+            ]
+            if kd_local_ids:
+                ranges = torch.tensor(
+                    [
+                        self.kd_factor_range[actuator.target_names[index]]
+                        for index in kd_local_ids
+                    ],
+                    device=self.device,
+                )
+                low, high = ranges.unbind(1)
+                damping[:, kd_local_ids] *= self._rand_log_uniform(
+                    n_env, low, high
+                )
+
+            actuator.set_gains(env_ids, kp=stiffness, kd=damping)
 
 
 class random_motor_failure(Randomization):

@@ -292,6 +292,7 @@ class AssetCfg:
 
     self_collisions: bool = True
     mjlab_collisions: List[MjlabCollisionCfg] = field(default_factory=list)
+    mjlab_remove_xml_actuators: bool = False
 
     joint_symmetry_mapping: Optional[Dict[str, Tuple[int, str]]] = None
     spatial_symmetry_mapping: Optional[Dict[str, str]] = None
@@ -517,6 +518,9 @@ class AssetCfg:
         )
         
         spec = mujoco.MjSpec.from_file(str(_resolve_asset_path(self.mjcf_path)))
+        if self.mjlab_remove_xml_actuators:
+            for actuator in list(spec.actuators):
+                spec.delete(actuator)
 
         return EntityCfg(
             init_state=self.init_state.mjlab(),
