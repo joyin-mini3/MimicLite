@@ -250,7 +250,7 @@ reward:
       _target_: mimic_lite.feet_slip
       weight: 0.5
       tolerance: 0.0
-      enabled: false
+      enabled: true
       body_names: .*ankle_roll_link
 
     feet_air_time:
