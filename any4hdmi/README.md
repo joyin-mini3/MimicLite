@@ -52,6 +52,31 @@ uv run any4hdmi-convert-mini3-pkl \
   --input-path /home/amax/Desktop/robot/UFO/humanoidverse/data/pkl
 ```
 
+Retarget one PICO motion clip to Mini3 and open the converted motion in the
+MuJoCo viewer. The input may be a normal `.npz` clip or an unpacked directory
+containing one `.npy` file per field:
+
+```bash
+uv run any4hdmi-convert-mini3-pico \
+  --input-path ../pico_source_data/sample_clip_20260726_171741
+```
+
+Headless conversion, suitable for a script or remote machine:
+
+```bash
+uv run any4hdmi-convert-mini3-pico \
+  --input-path ../pico_source_data/sample_clip_20260726_171741 \
+  --no-viewer
+```
+
+PICO conversion writes a separate dataset at `output/mini3/pico`. It uses the
+Sonic 6D anchor for the Mini3 root orientation when available, and MuJoCo
+damped least-squares IK for the two ankle and two hand targets. Each converted
+motion has a JSON sidecar with scale, target mapping, and IK endpoint errors.
+The default temporal trust region limits each joint to `0.12 rad` per source
+frame; override it with `--max-frame-joint-delta` only after inspecting the
+converted motion and its endpoint errors.
+
 The default output is `output/mini3/sonic`: source subdirectories are retained,
 so `pkl/230210/example.pkl` becomes
 `output/mini3/sonic/motions/230210/example.npz`. Each NPZ contains only

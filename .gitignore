@@ -21,4 +21,5 @@ MUJOCO_LOG.TXT
 /any4hdmi/output/
 /wandb/
 /logs/
+/pico_source_data/
 /exp_setup.md

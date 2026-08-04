@@ -1,0 +1,7 @@
+# @package task.command
+
+motion_cfgs:
+  pico:
+    path: ../any4hdmi/output/mini3/pico
+    weight: 1.0
+    full_motion: true
