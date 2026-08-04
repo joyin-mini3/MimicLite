@@ -87,6 +87,14 @@ class Mini3PicoConversionTest(unittest.TestCase):
         anchors = np.empty((len(joint_frames), 6), dtype=np.float32)
         root_yaw_quat = np.empty(4, dtype=np.float64)
         mujoco.mju_axisAngle2Quat(root_yaw_quat, np.asarray([0.0, 0.0, 1.0]), 1.1)
+        link_frame_offset = np.empty(4, dtype=np.float64)
+        link_frame_offset_inverse = np.empty(4, dtype=np.float64)
+        mujoco.mju_axisAngle2Quat(
+            link_frame_offset,
+            np.asarray([0.3, -0.5, 0.8]) / np.linalg.norm([0.3, -0.5, 0.8]),
+            0.9,
+        )
+        mujoco.mju_negQuat(link_frame_offset_inverse, link_frame_offset)
         for frame_idx, joint_values in enumerate(joint_frames):
             data.qpos[:] = model.qpos0
             data.qpos[0] += 0.02 * frame_idx
@@ -102,7 +110,16 @@ class Mini3PicoConversionTest(unittest.TestCase):
                 body_id = model.body(body_name).id
                 rotation = data.xmat[body_id].reshape(3, 3)
                 positions[frame_idx, body_idx] = data.xpos[body_id] + rotation @ local_point
-                quaternions[frame_idx, body_idx] = data.xquat[body_id]
+                if source_name == "pelvis":
+                    quaternions[frame_idx, body_idx] = data.xquat[body_id]
+                else:
+                    source_quat = np.empty(4, dtype=np.float64)
+                    mujoco.mju_mulQuat(
+                        source_quat,
+                        data.xquat[body_id],
+                        link_frame_offset_inverse,
+                    )
+                    quaternions[frame_idx, body_idx] = source_quat
 
         arrays = {
             "body_names": np.asarray(PICO_BODY_NAMES),
@@ -171,6 +188,18 @@ class Mini3PicoConversionTest(unittest.TestCase):
                 ],
             ]
             self.assertLess(float(np.abs(hip_yaw).max()), 0.2)
+            ankle_roll_indices = [
+                self.layout.joint_qpos_adrs[
+                    joint_index["left_ankle_roll_joint"]
+                ],
+                self.layout.joint_qpos_adrs[
+                    joint_index["right_ankle_roll_joint"]
+                ],
+            ]
+            self.assertLess(
+                float(np.abs(qpos[:, ankle_roll_indices]).max()),
+                0.2,
+            )
 
             report = json.loads(output.with_suffix(".json").read_text(encoding="utf-8"))
             self.assertEqual(report["root_orientation_source"], "sonic_smpl_anchor_orientation")

@@ -20,9 +20,10 @@ Pico clip (.npz 或解包后的 .npy 目录)
 并默认把相邻 source frame 的单关节变化限制为 0.12 rad，避免稀疏 IK 分支跳变；
 这些约束只用于生成 reference motion，不会对策略 action 增加限幅。
 
-脚部朝向先转换为 source root-relative，再消除 G1 与 Mini3 link frame 的首帧固定
-偏置，最后乘回当前 Mini3 `base_link` 朝向。不能直接在世界坐标中用首帧脚姿态对齐，
-否则当 reference root 带有非零 yaw 时，hip-yaw 会产生大小相反的补偿角。
+脚部朝向先转换为 source root-relative，再右乘 G1 到 Mini3 link frame 的首帧固定
+坐标轴偏置，最后乘回当前 Mini3 `base_link` 朝向。这个 link-frame 偏置不能左乘，
+也不能直接在世界坐标中对齐；否则非零 root yaw 会让 hip-yaw 产生反向补偿，脚抬起
+后还会把 ankle pitch/roll 旋转到错误轴上。
 
 ## 转换
 

@@ -546,7 +546,7 @@ def retarget_pico_clip(
         raise ValueError(f"scale must be finite and positive, got {resolved_scale}")
 
     source_index = {name: idx for idx, name in enumerate(PICO_BODY_NAMES)}
-    orientation_alignment_root = []
+    orientation_frame_offset_root = []
     source_root_quat_inverse_initial = _quat_conjugate_wxyz(
         clip.root_quat_wxyz[0]
     )
@@ -562,10 +562,10 @@ def retarget_pico_clip(
         target_quat_root_default = _quat_multiply_wxyz(
             target_root_quat_inverse_default, target_quat
         )
-        orientation_alignment_root.append(
+        orientation_frame_offset_root.append(
             _quat_multiply_wxyz(
-                target_quat_root_default,
                 _quat_conjugate_wxyz(source_quat_root_initial),
+                target_quat_root_default,
             )
         )
 
@@ -621,13 +621,13 @@ def retarget_pico_clip(
                 _quat_multiply_wxyz(
                     clip.root_quat_wxyz[frame_idx],
                     _quat_multiply_wxyz(
-                        orientation_alignment_root[target_idx],
                         _quat_multiply_wxyz(
                             source_root_quat_inverse,
                             clip.body_quat_wxyz[
                                 frame_idx, source_index[target.source_name]
                             ],
                         ),
+                        orientation_frame_offset_root[target_idx],
                     ),
                 )
                 for target_idx, target in enumerate(targets)
@@ -771,7 +771,9 @@ def _retarget_metadata(clip: PicoMotionClip, result: RetargetResult) -> dict[str
         "source_body_state_frame": clip.body_state_frame,
         "pico_position_axes_version": clip.position_axes_version,
         "root_orientation_source": clip.root_orientation_source,
-        "endpoint_orientation_alignment": "source-root-relative_to_target-root-relative",
+        "endpoint_orientation_alignment": (
+            "source-root-relative_with_right-multiplied_link-frame-offset"
+        ),
         "position_scale": result.scale,
         "target_mapping": result.target_mapping,
         "ik_mean_position_error_m": result.mean_position_error_m,
