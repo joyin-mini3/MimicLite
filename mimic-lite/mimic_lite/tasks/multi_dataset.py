@@ -258,7 +258,13 @@ def load_motion_dataset_collection(
     joint_names: list[str] | None = None,
     windowed_next_window_device: str | None = "current",
     windowed_pin_window_load: bool = True,
+    sequential_eval: bool = False,
+    sequential_window_frames: int = 512,
 ) -> BaseDataset:
+    if sequential_eval and len(motion_cfgs) != 1:
+        raise ValueError(
+            "Sequential evaluation currently requires exactly one motion dataset"
+        )
     datasets = [
         create_dataset_fn(
             cfg.path,
@@ -271,6 +277,8 @@ def load_motion_dataset_collection(
             joint_names=joint_names,
             windowed_next_window_device=windowed_next_window_device,
             windowed_pin_window_load=windowed_pin_window_load,
+            sequential_eval=sequential_eval,
+            sequential_window_frames=sequential_window_frames,
         )
         for cfg in motion_cfgs
     ]

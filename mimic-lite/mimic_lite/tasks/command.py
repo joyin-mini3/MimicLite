@@ -369,6 +369,8 @@ class RobotTracking(Command, namespace="mimic_lite"):
         anchor_body_name: str = "torso_link",
         windowed_next_window_device: str | None = "current",
         windowed_pin_window_load: bool = True,
+        sequential_eval: bool = False,
+        sequential_window_frames: int = 512,
         call_update: bool = True,
         replay_motion: bool = False,
         record_motion: bool = False,
@@ -417,6 +419,8 @@ class RobotTracking(Command, namespace="mimic_lite"):
             joint_names=motion_joint_names,
             windowed_next_window_device=windowed_next_window_device,
             windowed_pin_window_load=windowed_pin_window_load,
+            sequential_eval=sequential_eval,
+            sequential_window_frames=sequential_window_frames,
         ).to(self.device)
         if bool(getattr(self.asset.cfg, "strict_joint_contract", False)):
             expected_joint_names = list(self.asset.cfg.joint_names_simulation)
@@ -718,6 +722,15 @@ class RobotTracking(Command, namespace="mimic_lite"):
             init_joint_pos, init_joint_vel, env_ids=env_ids
         )
 
+        # The training sampler historically refreshes reference buffers at the
+        # end of the next environment step. A persistent sequential evaluator
+        # reuses env slots for unrelated motions, so carrying that previous
+        # reference into the first termination update would make the result
+        # depend on queue order. Prepare the newly assigned reference now; the
+        # reset observation is still produced by the normal environment path.
+        if getattr(self.dataset, "dataset_kind", None) == "sequential_windowed":
+            self._prepare_reset_reference_buffers(env_ids)
+
         if self.record_motion:
             if len(self.motion_frames) > 0:
                 self._save_motion()
@@ -839,6 +852,49 @@ class RobotTracking(Command, namespace="mimic_lite"):
         ]
         self.robot_anchor_quat_w = self.asset.data.body_link_quat_w[
             :, self.anchor_body_idx_asset
+        ]
+
+    def _prepare_reset_reference_buffers(self, env_ids: torch.Tensor) -> None:
+        """Replace only reset env references before their next update.
+
+        Updating the complete buffer here would advance non-reset environments
+        by one reference frame during a partial vectorized reset.
+        """
+        future_ref_motion = self.dataset.get_slice(
+            self.motion_ids[env_ids],
+            self.t[env_ids],
+            steps=self.future_steps,
+            profile_name="sequential_reset_reference",
+        )
+        self.future_ref_motion[env_ids] = future_ref_motion
+        env_origins = self.env.scene.env_origins[env_ids]
+        self.ref_body_pos_future_w[env_ids] = (
+            future_ref_motion.body_pos_w[
+                ..., self.tracking_body_indices_motion, :
+            ]
+            + env_origins[:, None, None, :]
+        )
+        self.ref_body_lin_vel_future_w[env_ids] = future_ref_motion.body_lin_vel_w[
+            ..., self.tracking_body_indices_motion, :
+        ]
+        self.ref_body_quat_future_w[env_ids] = future_ref_motion.body_quat_w[
+            ..., self.tracking_body_indices_motion, :
+        ]
+        self.ref_body_ang_vel_future_w[env_ids] = future_ref_motion.body_ang_vel_w[
+            ..., self.tracking_body_indices_motion, :
+        ]
+        self.ref_joint_pos_future_[env_ids] = future_ref_motion.joint_pos[
+            ..., self.tracking_joint_indices_motion
+        ]
+        self.ref_joint_vel_future_[env_ids] = future_ref_motion.joint_vel[
+            ..., self.tracking_joint_indices_motion
+        ]
+        self.ref_anchor_pos_future_w[env_ids] = (
+            future_ref_motion.body_pos_w[..., self.anchor_body_idx_motion, :]
+            + env_origins[:, None, :]
+        )
+        self.ref_anchor_quat_future_w[env_ids] = future_ref_motion.body_quat_w[
+            ..., self.anchor_body_idx_motion, :
         ]
 
     def _read_current_robot_state_mjlab(self):

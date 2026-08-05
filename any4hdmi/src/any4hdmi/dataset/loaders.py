@@ -15,6 +15,7 @@ from any4hdmi.dataset.loading import (
     resolve_input_paths,
     resolve_motion_filenames,
 )
+from any4hdmi.dataset.sequential import SequentialWindowedMotionDataset
 from any4hdmi.dataset.windowed import WindowedMotionDataset
 
 
@@ -83,11 +84,19 @@ def build_runtime_dataset(
     *,
     full_motion: bool,
     num_envs: int,
+    sequential_eval: bool = False,
+    sequential_window_frames: int = 512,
     windowed_next_window_device: str | torch.device | None = "current",
     windowed_pin_window_load: bool = True,
 ) -> BaseDataset:
     """Build the requested runtime strategy without inspecting partition state."""
-    if full_motion:
+    if sequential_eval:
+        dataset: BaseDataset = SequentialWindowedMotionDataset.from_cache_entry(
+            entry,
+            num_envs=num_envs,
+            window_frames=sequential_window_frames,
+        )
+    elif full_motion:
         dataset: BaseDataset = FullMotionDataset.from_cache_entry(
             entry,
             num_envs=num_envs,
@@ -102,6 +111,7 @@ def build_runtime_dataset(
         )
     print(
         f"[any4hdmi][runtime] full_motion={int(full_motion)}"
+        f" sequential_eval={int(sequential_eval)}"
         f" dataset={type(dataset).__name__} motions={len(entry.ends)}"
         f" frames={entry.ends[-1]}"
         f" storage_dtype={entry.storage_fields['body_pos_w'].dtype}"
@@ -126,6 +136,8 @@ def load_any4hdmi_dataset(
     joint_names: list[str] | None = None,
     windowed_next_window_device: str | torch.device | None = "current",
     windowed_pin_window_load: bool = True,
+    sequential_eval: bool = False,
+    sequential_window_frames: int = 512,
 ) -> BaseDataset:
     entry = prepare_cache_entry(
         root_path=root_path,
@@ -146,6 +158,8 @@ def load_any4hdmi_dataset(
         entry,
         full_motion=full_motion,
         num_envs=num_envs,
+        sequential_eval=sequential_eval,
+        sequential_window_frames=sequential_window_frames,
         windowed_next_window_device=windowed_next_window_device,
         windowed_pin_window_load=windowed_pin_window_load,
     )
@@ -155,6 +169,7 @@ __all__ = [
     "FKCache",
     "FKCacheEntry",
     "FullMotionDataset",
+    "SequentialWindowedMotionDataset",
     "WindowedMotionDataset",
     "build_runtime_dataset",
     "load_any4hdmi_dataset",

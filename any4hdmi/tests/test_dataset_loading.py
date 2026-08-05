@@ -18,6 +18,7 @@ from any4hdmi.dataset.loaders import (
     prepare_cache_entry,
 )
 from any4hdmi.dataset.loading import resolve_dataset_context, resolve_motion_filenames
+from any4hdmi.dataset.sequential import SequentialWindowedMotionDataset
 from any4hdmi.dataset.windowed import WindowedMotionDataset
 
 
@@ -48,13 +49,71 @@ def _entry(root: Path) -> FKCacheEntry:
             "body_lin_vel_w": torch.zeros(body_shape, dtype=torch.float16),
             "body_quat_w": torch.zeros((frames, 1, 4), dtype=torch.float16),
             "body_ang_vel_w": torch.zeros(body_shape, dtype=torch.float16),
-            "joint_pos": torch.zeros((frames, 1), dtype=torch.float16),
+            "joint_pos": torch.arange(frames, dtype=torch.float16).unsqueeze(1),
             "joint_vel": torch.zeros((frames, 1), dtype=torch.float16),
         },
     )
 
 
 class DatasetLoadingTest(unittest.TestCase):
+    def test_sequential_runtime_streams_complete_motion_across_windows(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            dataset = SequentialWindowedMotionDataset.from_cache_entry(
+                _entry(Path(temp_dir)),
+                num_envs=2,
+                window_frames=4,
+                device="cpu",
+            )
+            dataset.set_motion_queue([3, 1])
+            env_ids = torch.tensor([0, 1])
+            sampled = dataset.sample_motion(
+                env_ids,
+                terminated_t=torch.zeros(2, dtype=torch.long),
+                rewind_mask=torch.zeros(2, dtype=torch.bool),
+                rewind_steps=torch.zeros(2, dtype=torch.long),
+            )
+
+            torch.testing.assert_close(sampled.motion_id, env_ids)
+            torch.testing.assert_close(sampled.motion_len, torch.tensor([6, 5]))
+            torch.testing.assert_close(
+                dataset.env_source_motion_ids, torch.tensor([3, 1])
+            )
+
+            expected = (
+                ([10.0, 10.0, 11.0], 0),
+                ([12.0, 13.0, 14.0], 3),
+                ([14.0, 15.0, 15.0], 5),
+            )
+            for values, start in expected:
+                result = dataset.get_slice(
+                    torch.tensor([0]),
+                    torch.tensor([start]),
+                    torch.tensor([-1, 0, 1]),
+                )
+                torch.testing.assert_close(
+                    result.joint_pos.squeeze(), torch.tensor(values)
+                )
+
+            inactive = dataset.sample_motion(
+                torch.tensor([0]),
+                terminated_t=torch.tensor([6]),
+                rewind_mask=torch.tensor([False]),
+                rewind_steps=torch.tensor([0]),
+            )
+            self.assertFalse(bool(dataset.env_active[0]))
+            self.assertGreater(int(inactive.motion_len[0]), 1_000_000)
+
+    def test_runtime_factory_builds_sequential_evaluator(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            dataset = build_runtime_dataset(
+                _entry(Path(temp_dir)),
+                full_motion=False,
+                num_envs=2,
+                sequential_eval=True,
+                sequential_window_frames=4,
+            )
+        self.assertIsInstance(dataset, SequentialWindowedMotionDataset)
+
     def test_filenames_path_resolves_relative_to_dataset_root(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp = Path(temp_dir)

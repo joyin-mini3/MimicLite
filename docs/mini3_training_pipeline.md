@@ -261,19 +261,51 @@ Observation 实现：
 - [本体历史 observation](../mimic-lite/mimic_lite/tasks/observations/common.py)
 - [Reference/tracking observation](../mimic-lite/mimic_lite/tasks/observations/track.py)
 
-### 4.3 Actor 输出
+### 4.3 Actor 网络架构与输出
 
-当前正在使用的 Base Actor 结构：
+当前 Mini3 正式训练命令使用 <code>algo/ppo/module=residual</code>。归一化后的
+<code>policy</code> 和 <code>command</code> 按固定顺序拼接成 663 维输入，随后同时进入
+Base 分支和 Residual 分支；两个分支不共享参数。
 
 ~~~text
-663
- → Linear(256) + LayerNorm + Mish
- → Linear(256) + LayerNorm + Mish
- → Linear(256) + LayerNorm + Mish
- → μ: 21
+normalized policy (399) ─┐
+                         ├─ concat → x (663)
+normalized command (264) ┘
+
+Base branch:
+x
+ └→ Linear(663, 256)  → LayerNorm(256)  → Mish
+   → Linear(256, 256) → LayerNorm(256)  → Mish
+   → Linear(256, 256) → LayerNorm(256)  → Mish
+   → h_base (256)
+
+Residual branch:
+x
+ └→ Linear(663, 1024)   → LayerNorm(1024) → Mish
+   → Linear(1024, 1024) → LayerNorm(1024) → Mish
+   → Linear(1024, 1024) → LayerNorm(1024) → Mish
+   → Linear(1024, 256)
+   → h_residual (256)
+
+Feature gate:
+h_actor = h_base + sigmoid(alpha_raw) × h_residual
+
+Policy head:
+h_actor (256) → Linear(256, 21) → μ (21)
 ~~~
 
-Actor 还有一个可学习、与状态无关的 21 维 <code>σ</code>，训练时构造无界对角高斯：
+<code>alpha_raw</code> 是一个可学习标量，初始值为 -4，因此训练开始时：
+
+\[
+\alpha=\operatorname{sigmoid}(-4)\approx 0.018
+\]
+
+这使网络初始行为主要由较小的 Base 分支决定，训练过程中再自行调节 1024 宽度
+Residual 分支的贡献。Residual 分支最后的 <code>Linear(1024, 256)</code> 后没有额外的
+LayerNorm 或 Mish。所有 Linear 层使用正交初始化，gain 为 0.01，bias 初始化为 0。
+
+Actor 还有一个可学习、与状态无关的 21 维 <code>σ</code> 参数，初始值为 1。训练时
+构造无界对角高斯：
 
 \[
 a_t \sim \mathcal{N}\left(\mu(s_t), \operatorname{diag}(\sigma^2)\right)
@@ -288,7 +320,23 @@ a_t \sim \mathcal{N}\left(\mu(s_t), \operatorname{diag}(\sigma^2)\right)
 
 Actor 不使用 tanh，也不对 action 做 clamp。ONNX/部署阶段使用确定性的 21 维均值 <code>μ</code>，不进行高斯采样。
 
-> 模型宽度由启动参数决定。<code>+exp=ppo/train</code> 默认选择 Large Actor（512×3）；当前旧 W&B run 的保存配置使用 Base Actor（256×3）。输入输出语义不因模型宽度改变。
+在当前 663 维输入下，Residual Actor 约有 335.6 万个可训练参数，其中包括
+Base 分支、Residual 分支、门控标量、均值输出头和 21 维标准差。
+
+模型选择只修改 Actor，不修改 Critic：
+
+| 启动配置 | Actor hidden dims | Residual 分支 |
+|---|---|---|
+| <code>small</code> | 128×3 | 无 |
+| <code>base</code> | 256×3 | 无 |
+| <code>large</code> | 512×3 | 无 |
+| <code>huge</code> | 1024×3 | 无 |
+| <code>base_deep</code> | 256×5 | 无 |
+| <code>large_deep</code> | 512×5 | 无 |
+| <code>residual</code> | Base 256×3 | 1024×3，再投影到 256，并通过可学习门控相加 |
+
+<code>+exp=ppo/train</code> 在没有显式覆盖时默认选择 <code>large</code>；当前推荐命令和旧
+W&B run 都显式使用 <code>algo/ppo/module=residual</code>。输入输出语义不因模型宽度改变。
 
 ### 4.4 Critic privileged 输入：474 维
 
@@ -314,11 +362,24 @@ Critic 输入总维度：
 priv 474 + policy 399 + command 264 = 1137
 ~~~
 
-Critic 结构：
+Critic 与 Actor 不共享网络参数。它将单独归一化的 <code>priv</code>、<code>policy</code> 和
+<code>command</code> 按这个顺序拼接为 1137 维输入，网络结构为：
 
 ~~~text
-1137 → 1024 → 512 → 256 → 2
+normalized priv (474) ────┐
+normalized policy (399) ──┼─ concat → x_critic (1137)
+normalized command (264) ─┘
+
+x_critic
+ └→ Linear(1137, 1024) → LayerNorm(1024) → Mish
+   → Linear(1024, 512) → LayerNorm(512)  → Mish
+   → Linear(512, 256)  → LayerNorm(256)  → Mish
+   → Linear(256, 2)
+   → [V_tracking, V_loco]
 ~~~
+
+最后一层不使用激活函数。与 Actor 一样，Critic 的 Linear 层使用 gain 0.01 的正交
+初始化，bias 初始化为 0。当前 1137 维输入下，Critic 约有 182.6 万个可训练参数。
 
 输出不是单一 value，而是：
 
@@ -328,6 +389,12 @@ V_loco
 ~~~
 
 这是因为当前有两个启用的 reward group：<code>tracking</code> 和 <code>loco</code>。PPO 分别计算两路 GAE，再各乘 0.5 后相加并归一化，得到 Actor 使用的最终 advantage。
+
+当前 Residual Actor 与 Critic 合计约有 518.2 万个网络参数；VecNorm 的运行统计是
+buffer，不计入这个可训练参数数目。网络构建实现见
+[PPOPolicy](../mimic-lite/mimic_lite_learning/ppo.py)、
+[Actor head](../mimic-lite/mimic_lite_learning/common.py) 和
+[MLP 构造函数](../active-adaptation/active_adaptation/learning/ppo/common.py)。
 
 ## 5. Actor 输出如何作用到环境
 

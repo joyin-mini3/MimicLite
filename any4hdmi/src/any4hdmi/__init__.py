@@ -5,6 +5,7 @@ from any4hdmi.dataset import (
     MotionDatasetRouter,
     MotionData,
     MotionSample,
+    SequentialWindowedMotionDataset,
     WindowedMotionDataset,
     load_any4hdmi_dataset,
 )
@@ -16,6 +17,7 @@ __all__ = [
     "MotionDatasetRouter",
     "MotionData",
     "MotionSample",
+    "SequentialWindowedMotionDataset",
     "WindowedMotionDataset",
     "load_any4hdmi_dataset",
 ]

@@ -35,6 +35,8 @@ def create_dataset_from_path(
     joint_names: list[str] | None = None,
     windowed_next_window_device: str | torch.device | None = "current",
     windowed_pin_window_load: bool = True,
+    sequential_eval: bool = False,
+    sequential_window_frames: int = 512,
 ) -> Any4HDMIBaseDataset:
     import active_adaptation
 
@@ -51,6 +53,8 @@ def create_dataset_from_path(
         joint_names=joint_names,
         windowed_next_window_device=windowed_next_window_device,
         windowed_pin_window_load=windowed_pin_window_load,
+        sequential_eval=sequential_eval,
+        sequential_window_frames=sequential_window_frames,
     )
     if not isinstance(dataset, Any4HDMIBaseDataset):
         raise TypeError(

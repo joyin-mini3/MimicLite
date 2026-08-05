@@ -323,3 +323,101 @@ class ref_motion_phase(TrackObservation, namespace="mimic_lite"):
 class motion_length(TrackObservation, namespace="mimic_lite"):
     def compute(self):
         return self.command_manager.motion_len.to(torch.float32).unsqueeze(1)
+
+
+class tracking_filter_diagnostics(TrackObservation, namespace="mimic_lite"):
+    """Current tracking errors used to explain checkpoint-filter failures.
+
+    The stable columns contain the termination-frame tracking errors, argmax
+    indices, and reference/robot root poses used in the filter artifact.
+    """
+
+    columns = (
+        "motion_t",
+        "root_pos_error",
+        "root_ori_error",
+        "body_pos_error_local_max",
+        "body_pos_error_local_argmax",
+        "body_ori_error_local_max",
+        "body_ori_error_local_argmax",
+        "joint_pos_error_max",
+        "joint_pos_error_argmax",
+        "applied_action_abs_max",
+        "applied_torque_abs_max",
+        "reference_root_pos_x",
+        "reference_root_pos_y",
+        "reference_root_pos_z",
+        "reference_root_quat_w",
+        "reference_root_quat_x",
+        "reference_root_quat_y",
+        "reference_root_quat_z",
+        "robot_root_pos_x",
+        "robot_root_pos_y",
+        "robot_root_pos_z",
+        "robot_root_quat_w",
+        "robot_root_quat_x",
+        "robot_root_quat_y",
+        "robot_root_quat_z",
+    )
+
+    def __init__(self, env, root_body_name: str, **kwargs):
+        super().__init__(env, **kwargs)
+        self.asset = self.command_manager.asset
+        self.action_manager = cast(JointPosition, self.env.action_manager)
+        try:
+            self.root_body_index = self.command_manager.tracking_body_names.index(
+                root_body_name
+            )
+        except ValueError as error:
+            raise ValueError(
+                f"Filter diagnostic root body {root_body_name!r} is not tracked"
+            ) from error
+
+    def compute(self):
+        body_pos_max, body_pos_argmax = self.command_manager.body_pos_error_local.max(
+            dim=1
+        )
+        body_ori_max, body_ori_argmax = self.command_manager.body_ori_error_local.max(
+            dim=1
+        )
+        joint_pos_max, joint_pos_argmax = self.command_manager.joint_pos_error.max(
+            dim=1
+        )
+        applied_action_abs_max = self.action_manager.applied_action.abs().max(
+            dim=1
+        ).values
+        if self.env.backend == "isaaclab":
+            applied_torque = self.asset.data.applied_torque
+        else:
+            applied_torque = self.asset.data.actuator_force
+        applied_torque_abs_max = applied_torque[
+            :, self.command_manager.tracking_joint_indices_asset
+        ].abs().max(dim=1).values
+        return torch.stack(
+            (
+                self.command_manager.obs_motion_t.to(torch.float32),
+                self.command_manager.body_pos_error[:, self.root_body_index],
+                self.command_manager.body_ori_error[:, self.root_body_index],
+                body_pos_max,
+                body_pos_argmax.to(torch.float32),
+                body_ori_max,
+                body_ori_argmax.to(torch.float32),
+                joint_pos_max,
+                joint_pos_argmax.to(torch.float32),
+                applied_action_abs_max,
+                applied_torque_abs_max,
+                *self.command_manager.ref_body_pos_w[
+                    :, self.root_body_index
+                ].unbind(dim=1),
+                *self.command_manager.ref_body_quat_w[
+                    :, self.root_body_index
+                ].unbind(dim=1),
+                *self.command_manager.robot_body_link_pos_w[
+                    :, self.root_body_index
+                ].unbind(dim=1),
+                *self.command_manager.robot_body_link_quat_w[
+                    :, self.root_body_index
+                ].unbind(dim=1),
+            ),
+            dim=1,
+        )
