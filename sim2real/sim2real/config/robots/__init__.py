@@ -1,12 +1,14 @@
 from sim2real.config.robots.base import RealMotorCfg, RobotCfg
 from sim2real.config.robots.g1 import G1_CFG
 from sim2real.config.robots.mini3 import MINI3_CFG
+from sim2real.config.robots.mini3_v031 import MINI3_V031_CFG
 from typing import Dict
 
 
 _ROBOT_CFGS: Dict[str, RobotCfg] = {
     G1_CFG.name: G1_CFG,
     MINI3_CFG.name: MINI3_CFG,
+    MINI3_V031_CFG.name: MINI3_V031_CFG,
 }
 
 
@@ -19,4 +21,11 @@ def get_robot_cfg(name: str) -> RobotCfg:
         raise ValueError(f"Unknown robot '{name}'. Available robots: {available}") from exc
 
 
-__all__ = ["RealMotorCfg", "RobotCfg", "G1_CFG", "MINI3_CFG", "get_robot_cfg"]
+__all__ = [
+    "RealMotorCfg",
+    "RobotCfg",
+    "G1_CFG",
+    "MINI3_CFG",
+    "MINI3_V031_CFG",
+    "get_robot_cfg",
+]

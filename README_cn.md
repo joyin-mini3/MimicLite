@@ -32,6 +32,14 @@ Mini3/G1 任务、动作转换工具和部署运行时的单体仓库；普通 `
 Mini3 当前契约为 21 个受控关节、50 Hz policy/reference、500 Hz MuJoCo physics。
 训练默认使用 `task=tracking-base-mini3`、`backend=mjlab`、`seed=0`。
 
+`mini3-v031` 是 v0.3.1 的显式版本化资产。它与旧 `mini3` 共享 21-DoF 的关节顺序，
+但使用独立的 MJCF、URDF、关节限位与初始高度；请从全新 checkpoint 训练，不能与旧
+`mini3` checkpoint 或数据目录混用。
+
+统一运行时使用 Python 3.12。`sim2real` 的本地 CPU/ONNX 流程已适配；Jetson 的历史
+`g1-gpu` 和 Unitree DDS 依赖固定在 Python 3.10；它们不属于本地 runtime 验收范围，
+仍需在目标机单独维护 Python 3.10 环境。
+
 ## Mini3 环境安装
 
 ### 系统要求
