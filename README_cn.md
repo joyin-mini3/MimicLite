@@ -348,6 +348,57 @@ CUDA_VISIBLE_DEVICES=0 uv --project venv/mjlab run \
 
 不要给带 root velocity 的 checkpoint 增加这两个删除项。
 
+### 原生 MuJoCo 窗口测试
+
+根目录 [`sim2sim_mini3_mimiclite.py`](sim2sim_mini3_mimiclite.py) 接受训练
+checkpoint 和对应的完整训练 YAML，自动导出并缓存 ONNX，再用 CPU 运行 Mini3
+跟踪策略和 MuJoCo。观测历史、参考动作、VecNorm 和电机模型复用工程实现。
+这是部署侧 Sim2Sim 测试，使用无观测噪声的部署配置，不复现训练中的随机化。
+
+在仓库根目录运行（使用已安装的 MJLab Python 环境）：
+
+```bash
+source active-adaptation/venv/mjlab/.venv/bin/activate
+# 若此环境未安装 sim2real 的这两个依赖，可将它们装入项目缓存：
+uv pip install --target .cache/mimiclite_sim2sim/deps loguru==0.7.3 pyzmq==27.0.2
+
+python sim2sim_mini3_mimiclite.py \
+  --load_model /absolute/path/to/checkpoint_2400.pt \
+  --config /absolute/path/to/config.yaml \
+  --motion /absolute/path/to/dataset/motions/clip.npz
+```
+
+`--config` 可省略：脚本会在 checkpoint 旁查找 `play_local.yaml` 或 `config.yaml`。
+参考动作必须是 any4hdmi 数据集中的单个 `.npz`，其上级目录须有 `manifest.json`。
+已下载本地对比包的机器也可直接运行 `--model sonic`、`--model beyondmimic`
+或 `--model beyondmimic_fast`；预设路径定义在脚本的 `PRESETS` 和 `BUNDLE` 中。
+
+窗口内按 **P** 暂停/继续、**R** 或 **0** 重置、**F** 切换相机跟随；青色点为参考
+身体位置。默认循环动作，累计仿真 60 秒后退出；`--duration 0` 持续显示，
+`--once` 播完一次退出。终端每秒打印参考帧和世界坐标下的根位置误差。
+加 `--headless --duration 10` 可进行无窗口测试；加
+`--trajectory outputs/mimiclite_test.npz` 可保存轨迹。
+
+导出文件和日志保存在 `.cache/mimiclite_sim2sim/`。`--export-only` 仅导出；后续可用
+`--load_model /path/to/policy.onnx --motion /path/to/clip.npz` 直接加载，需保留同名
+`.yaml` 及 ONNX 的外部权重文件。AMP 示例的速度按键不适用于动作跟踪策略。
+
+### 双夹爪与方块拾取场景
+
+新增双侧 10 cm 延长段及可开合夹爪的 Mini3 模型，并提供正前方包含三个 4 cm 方块
+和开口篮子的 MuJoCo 场景。头部及双爪配有 RGB 摄像头，头部相机下俯 45°。
+在上述 Python 环境中运行
+`python preview_mini3_pick_scene.py` 可打开手动调试窗口。
+尺寸、夹爪接口、骨盆支撑和操作按键见[场景说明](docs/mini3_pick_scene_cn.md)。
+
+`python mini3_pick_carry.py --start-paused` 可测试训练好的 Sonic policy 行走、
+右臂 IK 抓取和夹爪搬运。脚本使用桌面场景、真实接触和无支撑机器人；
+下蹲可达性实测、控制状态机与可视化命令见[行走搬运说明](docs/mini3_pick_carry_cn.md)。
+
+新增肘 yaw 与双轴手腕的版本已将双侧延长段缩短为 **5 cm**，根部沿前臂长轴自转并保持笔直。
+使用 `python mini3_pick_carry_7dof.py --start-paused` 在 **mujoco_viewer** 窗口中测试；
+环境依赖、独立模型、七关节位姿 IK 和碰撞审核见[双侧 7 自由度手臂说明](docs/mini3_7dof_pick_carry_cn.md)。
+
 ## Pico 数据转换和 Inference
 
 ### 支持的 Pico clip

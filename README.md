@@ -367,6 +367,68 @@ deletions:
 
 Do not add them for a checkpoint that was trained with root velocity.
 
+### Test in the native MuJoCo window
+
+The root [`sim2sim_mini3_mimiclite.py`](sim2sim_mini3_mimiclite.py) accepts a training
+checkpoint and its full training YAML, exports and caches ONNX, then runs the
+Mini3 tracking policy and MuJoCo on CPU. It reuses the project's observation
+histories, reference motions, VecNorm, and motor model. This is deployment-side
+sim2sim with deployment observations without noise; training randomization is
+not reproduced.
+
+Run from the repository root with the installed MJLab Python environment:
+
+```bash
+source active-adaptation/venv/mjlab/.venv/bin/activate
+# If these sim2real dependencies are missing, install them into the project cache:
+uv pip install --target .cache/mimiclite_sim2sim/deps loguru==0.7.3 pyzmq==27.0.2
+
+python sim2sim_mini3_mimiclite.py \
+  --load_model /absolute/path/to/checkpoint_2400.pt \
+  --config /absolute/path/to/config.yaml \
+  --motion /absolute/path/to/dataset/motions/clip.npz
+```
+
+Omit `--config` to discover `play_local.yaml` or `config.yaml` beside the
+checkpoint. Select one `.npz` inside an any4hdmi dataset with a parent
+`manifest.json`. Machines with the downloaded local comparison bundle can also
+use `--model sonic`, `--model beyondmimic`, or `--model beyondmimic_fast`;
+their paths are defined by `PRESETS` and `BUNDLE` in the script.
+
+Press **P** to pause/resume, **R** or **0** to reset, and **F** to toggle camera
+tracking. Cyan dots show reference body positions. Playback loops for 60 total
+simulated seconds by default; use `--duration 0` for unlimited viewing or
+`--once` to exit after one motion. The terminal reports reference frames and
+world-frame root position error every second. Use `--headless --duration 10`
+for a test without a window, or `--trajectory outputs/mimiclite_test.npz` to
+save a trajectory.
+
+Exports and logs live in `.cache/mimiclite_sim2sim/`. Use `--export-only` to
+export without playback. Later, load the export with
+`--load_model /path/to/policy.onnx --motion /path/to/clip.npz`, keeping its
+matching `.yaml` and external ONNX weight files together. The AMP example's
+velocity-command keys do not apply to motion-tracking policies.
+
+### Dual grippers and the cube-picking scene
+
+A separate Mini3 model adds two 10 cm extensions and actuated grippers. Its
+MuJoCo scene places three 4 cm cubes and an open basket in front of the initial
+robot pose. RGB cameras are mounted on the head and both grippers; the head
+camera points 45° downward. Run `python preview_mini3_pick_scene.py` in the Python environment
+above for manual adjustment. See the [scene guide](docs/mini3_pick_scene.md) for
+dimensions, gripper controls, pelvis support, and keyboard commands.
+
+Run `python mini3_pick_carry.py --start-paused` to test the trained Sonic walking
+policy with right-arm IK and a contact gripper in the tabletop scene. The robot
+has no pelvis support. See the [walking and carrying guide](docs/mini3_pick_carry.md)
+for measured crouching reach, the control state machine, and visualization commands.
+
+The version with added elbow yaw and two-axis wrists now uses **5 cm** extensions
+on both arms, with longitudinal root rotation keeping each forearm straight.
+Run `python mini3_pick_carry_7dof.py --start-paused` in **mujoco_viewer**; see the
+[seven-joint arm guide](docs/mini3_7dof_pick_carry.md) for environment dependencies,
+the separate models, pose IK, and collision auditing.
+
 ## Pico conversion and inference
 
 ### Supported Pico clips
