@@ -399,6 +399,11 @@ python sim2sim_mini3_mimiclite.py \
 使用 `python mini3_pick_carry_7dof.py --start-paused` 在 **mujoco_viewer** 窗口中测试；
 环境依赖、独立模型、七关节位姿 IK 和碰撞审核见[双侧 7 自由度手臂说明](docs/mini3_7dof_pick_carry_cn.md)。
 
+`python mini3_pick_carry_policy.py --start-paused` 提供独立的新版：原有 21 个关节全部由
+MimicLite policy 控制，仅新增关节单独规划；接近行走期间开始上肢避让与抬手，放置动作
+也与到达篮子的过程衔接。旧版入口保持不变。参考动作来源、版本备份与验证结果见
+[全身 policy 搬运说明](docs/mini3_policy_pick_carry_cn.md)。
+
 ## Pico 数据转换和 Inference
 
 ### 支持的 Pico clip

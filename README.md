@@ -429,6 +429,13 @@ Run `python mini3_pick_carry_7dof.py --start-paused` in **mujoco_viewer**; see t
 [seven-joint arm guide](docs/mini3_7dof_pick_carry.md) for environment dependencies,
 the separate models, pose IK, and collision auditing.
 
+Run `python mini3_pick_carry_policy.py --start-paused` for a separate version in
+which MimicLite controls all 21 original joints and only the added joints use an
+independent planner. Arm clearance and raising begin during the approach, and
+placement overlaps the final approach to the basket. The previous entry point
+remains available. See the [whole-body policy carrying guide](docs/mini3_policy_pick_carry.md)
+for reference provenance, the saved version, and validation results.
+
 ## Pico conversion and inference
 
 ### Supported Pico clips
