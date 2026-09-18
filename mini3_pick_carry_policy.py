@@ -92,6 +92,8 @@ class PolicyOnlyScene(ArticulatedPolicyScene):
         self.last_motor_command = np.zeros(21)
         self.policy_output_override_max = 0.0
         self.policy_output_checks = 0
+        self.control_observer = None
+        self.last_control_command = None
 
     def select_target(self, name: str) -> None:
         """Permit only right-finger contact with this episode's selected cube."""
@@ -120,6 +122,7 @@ class PolicyOnlyScene(ArticulatedPolicyScene):
             self.last_motor_command[:] = 0
             self.policy_output_override_max = 0.0
             self.policy_output_checks = 0
+            self.last_control_command = None
 
     def step(self) -> None:
         self.sync()
@@ -145,6 +148,18 @@ class PolicyOnlyScene(ArticulatedPolicyScene):
         extra_effort = np.zeros(6)
         if self.collision_phase != "APPROACH":
             extra_effort[3:] = self.data.qfrc_bias[self.extra_vids[3:]]
+        if self.control_observer is not None:
+            # Capture S_t and the exact command for the following ten physics
+            # steps. Copies keep a recorder from changing actuator commands.
+            commands = {name: value.copy() for name, value in {
+                "policy_q": q, "policy_dq": dq, "policy_effort": effort,
+                "policy_kp": kp, "policy_kd": kd, "extra_q": extra_command,
+                "extra_effort": extra_effort, "gripper_opening": self.openings,
+            }.items()}
+            for value in commands.values():
+                value.flags.writeable = False
+            self.last_control_command = commands
+            self.control_observer(self, commands)
         for _ in range(10):
             # The original 21 joints, including both original four-joint arms,
             # use exactly the policy's targets, gains, and feedforward effort.
