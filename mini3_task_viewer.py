@@ -37,6 +37,7 @@ class Mini3TaskViewer:
         self.paused = bool(start_paused)
         self.follow = True
         self.quit_requested = False
+        self.task_label = ""
         self._closed = False
         self._viewer = mujoco_viewer.MujocoViewer(
             self.model, self.data, mode="window", width=1280, height=960,
@@ -102,8 +103,8 @@ class Mini3TaskViewer:
         import mujoco
         self._default_overlay()
         self._viewer._overlay[mujoco.mjtGridPos.mjGRID_TOPRIGHT] = [
-            "Mini3 task\nP: pause/resume\nF: follow\nF8 / F9 / F10 / F11\nEsc\n",
-            f"{'PAUSED' if self.paused else 'RUNNING'}\n\n"
+            "Mini3 task\nTarget\nP: pause/resume\nF: follow\nF8 / F9 / F10 / F11\nEsc\n",
+            f"{'PAUSED' if self.paused else 'RUNNING'}\n{self.task_label or '-'}\n\n"
             f"{'on' if self.follow else 'off'}\noverview / head / left / right\nexit\n",
         ]
 

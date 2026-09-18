@@ -83,8 +83,37 @@ class PolicyTaskReferenceTest(unittest.TestCase):
         np.testing.assert_allclose(self.plan.sample(1)["qpos"], placed[50])
         self.assertGreater(abs(self.plan.sample(1)["qpos"][0] - self.source_qpos[49, 0]), 4)
         hold = self.plan.sample(10)["qpos"]
-        np.testing.assert_allclose(hold[:2], [.077, .004])
+        np.testing.assert_allclose(hold[:2], placed[-1, :2])
         np.testing.assert_allclose(hold[7:19], placed[-1, 7:19])
+
+    def test_root_transitions_chain_reference_endpoints_without_recorded_drift(self) -> None:
+        approach, _ = shorten_walk(self.walk, 2.65)
+        approach = place_qpos(approach, origin_xy=(-2.72, 0), align_travel=True)
+        carry, _ = shorten_walk(self.walk, 1.0)
+        carry = place_qpos(carry, origin_xy=approach[-1, :2], align_travel=True)
+        for time, expected in ((self.plan.metadata["approach_end"], approach[-1]),
+                               (self.plan.metadata["carry_start"], approach[-1]),
+                               (self.plan.metadata["carry_walk_end_s"], carry[-1])):
+            with self.subTest(time=time):
+                before = self.plan.sample(time - self.plan.dt)["qpos"]
+                at = self.plan.sample(time)["qpos"]
+                np.testing.assert_allclose(at[:3], expected[:3], atol=1e-12)
+                np.testing.assert_allclose(at[:3], before[:3], atol=1e-12)
+        # The synthetic walking clip advances 1 cm per tick. Measured root
+        # offsets must not introduce larger finite-difference target velocities.
+        speeds = np.linalg.norm(np.diff(self.plan.qpos[:, :3], axis=0), axis=1) / self.plan.dt
+        self.assertLessEqual(float(speeds.max()), .5 + 1e-10)
+
+    def test_measured_event_root_offsets_do_not_change_locomotion_reference(self) -> None:
+        report = json.loads(json.dumps(self.report))
+        for event in report["events"]:
+            event["base_xyz"] = [20.0, -30.0, 10.0]
+        path = self.folder / "drifted_report.json"
+        path.write_text(json.dumps(report))
+        changed = self.build(report_path=path)
+        np.testing.assert_array_equal(changed.qpos, self.plan.qpos)
+        np.testing.assert_array_equal(changed.times, self.plan.times)
+        np.testing.assert_array_equal(changed.extra_command, self.plan.extra_command)
 
     def test_arm_raises_during_approach_and_keeps_recorded_movement_speed(self) -> None:
         self.assertEqual(self.plan.metadata["arm_raise_start"], 3.48)

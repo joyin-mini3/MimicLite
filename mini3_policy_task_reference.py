@@ -118,16 +118,14 @@ def _source_body_reference(
         original = np.asarray(archive["qpos"], dtype=float)
     approach, approach_meta = shorten_walk(original, 2.65)
     approach = place_qpos(approach, origin_xy=report["initial_root_xyz"][:2], align_travel=True)
-    carry, carry_meta = shorten_walk(original, 1.0)
-    carry_origin = source_events["CARRY"]["base_xyz"][:2]
-    carry = place_qpos(carry, origin_xy=carry_origin, align_travel=True)
+    # Chain reference endpoints. Recorded root positions include policy tracking
+    # error; inserting them here teleports the reference when walking stops and
+    # turns the offset into a large one-frame target velocity.
     pick_hold = approach[-1].copy()
-    pick_hold[:2] = source_events["CLEAR_ARM"]["base_xyz"][:2]
-    carry_start = pick_hold.copy()
-    carry_start[:2] = carry_origin
-    carry = np.concatenate((blend_poses(carry_start, carry[0], 1.0, dt)[:-1], carry))
+    carry, carry_meta = shorten_walk(original, 1.0)
+    carry = place_qpos(carry, origin_xy=pick_hold[:2], align_travel=True)
+    carry = np.concatenate((blend_poses(pick_hold, carry[0], 1.0, dt)[:-1], carry))
     basket_hold = carry[-1].copy()
-    basket_hold[:2] = source_events["PLACE"]["base_xyz"][:2]
     clear_time = float(source_events["CLEAR_ARM"]["time"])
     carry_time = float(source_events["CARRY"]["time"])
     place_time = float(source_events["PLACE"]["time"])
@@ -138,7 +136,7 @@ def _source_body_reference(
     result[mask] = _poses(carry_time + np.arange(len(carry)) * dt, carry, query[mask])
     result[query >= place_time - 1e-8] = basket_hold
     return result, {"approach": approach_meta, "carry": carry_meta,
-                    "source": "reconstructed original walking reference; measured root XY at transitions"}
+                    "source": "reconstructed original walking reference; chained reference endpoints"}
 
 
 def build_task_reference(

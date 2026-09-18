@@ -93,6 +93,23 @@ class PolicyOnlyScene(ArticulatedPolicyScene):
         self.policy_output_override_max = 0.0
         self.policy_output_checks = 0
 
+    def select_target(self, name: str) -> None:
+        """Permit only right-finger contact with this episode's selected cube."""
+        from audit_mini3_arm_collisions import arm_collision_pairs
+        model, planner = self.model, self.ik
+        geom_name = name + "_geom"
+        cube = model.geom(geom_name).id
+        pairs = arm_collision_pairs(model, "right", target_geom=geom_name, grasp_side="right")
+        planner.target_pair_start = len(pairs)
+        fingers = {tuple(sorted((cube, model.geom(f"right_gripper_finger_{part}_geom").id)))
+                   for part in ("positive", "negative")}
+        pairs.extend(sorted(fingers))
+        planner.collision_pairs = np.asarray(pairs, dtype=int)
+        planner.pair_radii = model.geom_rbound[planner.collision_pairs].sum(axis=1)
+        planner.plane_pairs = np.any(model.geom_type[planner.collision_pairs] == mujoco.mjtGeom.mjGEOM_PLANE, axis=1)
+        self.unexpected_pairs = set(arm_collision_pairs(model, target_geom=geom_name, grasp_side="right"))
+        self.pregrasp_pairs = fingers
+
     def reset(self) -> None:
         super().reset()
         if hasattr(self, "extra_reference"):
@@ -158,6 +175,7 @@ class GatedReference(MotionReference):
     def __init__(self, qpos: np.ndarray) -> None:
         super().__init__(qpos)
         self.allowed_frame = self.num_steps - 1
+        self.root_velocity_correction = np.zeros(3)
 
     def get_slice(self, motion_ids: np.ndarray, starts: np.ndarray, steps: np.ndarray) -> Any:
         from sim2real.rl_policy.utils.motion import MotionData
@@ -166,18 +184,27 @@ class GatedReference(MotionReference):
         indices = np.clip(np.asarray(starts, dtype=np.int64).reshape(-1, 1)
                           + np.asarray(steps, dtype=np.int64).reshape(1, -1),
                           0, self.allowed_frame)
-        return MotionData(**{name: values[indices] for name, values in self._storage.items()})
+        values = {name: values[indices] for name, values in self._storage.items()}
+        if np.any(self.root_velocity_correction):
+            horizon = np.asarray(steps, dtype=float) * self.dt
+            values["body_pos_w"] += horizon[None, :, None, None] * self.root_velocity_correction
+            values["body_lin_vel_w"] += self.root_velocity_correction
+        return MotionData(**values)
 
 
 class PolicyPickCarryTask(PickCarryTask):
     """Overlapping reference playback with measured contact and release gates."""
 
-    def __init__(self, runtime: PolicyOnlyScene, plan: TaskReferencePlan, *, gate_timeout: float = 3.0) -> None:
+    def __init__(self, runtime: PolicyOnlyScene, plan: TaskReferencePlan, *, gate_timeout: float = 3.0,
+                 target_body: str = "pick_cube_3", episode: dict | None = None) -> None:
         if not np.isfinite(gate_timeout) or gate_timeout <= 0:
             raise ValueError("Gate timeout must be finite and positive")
         self.r, self.plan = runtime, plan
-        self.cube = runtime.model.body("pick_cube_3").id
-        self.cube_geom = runtime.model.geom("pick_cube_3_geom").id
+        self.episode = episode
+        self.target_body = target_body
+        runtime.select_target(target_body)
+        self.cube = runtime.model.body(target_body).id
+        self.cube_geom = runtime.model.geom(target_body + "_geom").id
         self.basket = runtime.model.body("pick_basket").id
         self.finger_geoms = [runtime.model.geom(f"right_gripper_finger_{part}_geom").id
                             for part in ("positive", "negative")]
@@ -192,21 +219,34 @@ class PolicyPickCarryTask(PickCarryTask):
         self.reference = GatedReference(plan.qpos)
         self.reference.allowed_frame = round(self.phase_times["LIFT"] / .02) - 1
         install_reference(runtime.policy, self.reference, paused=True)
-        runtime.initialize_robot(plan.qpos[0])
+        initial_pose = plan.qpos[0].copy()
+        if episode is not None:
+            initial_pose[:3] += episode["pickup_translation_m"]
+            initial_pose[:2] += [.027, .020]
+        runtime.initialize_robot(initial_pose)
+        self.initial_root = runtime.data.qpos[:3].copy()
         runtime.policy.state_dict["paused"] = False
         self.scratch = mujoco.MjData(runtime.model)
         self.gate_timeout = gate_timeout
         self.gate_wait = 0.0
-        self.gate_waits = {name: 0.0 for name in ("CLOSE", "LIFT", "CARRY", "RELEASE")}
+        self.gate_waits = {name: 0.0 for name in ("ALIGN", "CLOSE", "LIFT", "CARRY", "RELEASE")}
         self.settled_s = self.contact_lost_s = 0.0
         self.close_started = None
+        self.descent_aligned = False
         self.grasp_verified = False
         self.lift_verified = False
         self.last_print = -1
         self.tool_height_offset = .005
+        self.tool_transition_s = .4
+        self.tool_transition_pending = False
+        self.tool_position_offset = np.zeros(3)
+        self.tool_rotation_offset = np.zeros(3)
         self.enter("APPROACH")
 
     def enter(self, phase: str) -> None:
+        self.tool_transition_pending = phase in ("REACH", "CARRY", "PLACE")
+        self.tool_position_offset[:] = 0
+        self.tool_rotation_offset[:] = 0
         self.r.collision_phase = phase
         self.r.ik.allow_target_contact = phase in ("LOWER", "CLOSE", "LIFT", "CARRY", "PLACE", "RELEASE", "SUCCESS")
         self.r.ik.held_body_id = self.cube if phase in ("LIFT", "CARRY", "PLACE") else None
@@ -221,6 +261,13 @@ class PolicyPickCarryTask(PickCarryTask):
         ready = bool(np.all(np.abs(relative[:2]) + half[:2] < .033)
                      and abs(relative[2]) < .010 and upright)
         return ready, relative
+
+    def horizontal_alignment(self) -> bool:
+        data, ik = self.r.data, self.r.ik
+        rotation = data.site_xmat[ik.site].reshape(3, 3)
+        relative = rotation.T @ (data.xpos[self.cube] - ik.position(data))
+        half = np.abs(rotation.T @ data.xmat[self.cube].reshape(3, 3)) @ self.r.model.geom_size[self.cube_geom]
+        return bool(np.all(np.abs(relative[:2]) + half[:2] < .033))
 
     def closing_command(self, elapsed: float) -> float:
         rotation = self.r.data.site_xmat[self.r.ik.site].reshape(3, 3)
@@ -238,6 +285,8 @@ class PolicyPickCarryTask(PickCarryTask):
 
     def set_extra_plan(self, sample: dict[str, Any]) -> None:
         r = self.r
+        previous_target = None if r.tool_target is None else r.tool_target.copy()
+        previous_rotation = r.ik.orientation.copy()
         r.extra_reference[:] = sample["extra_command"]
         self.scratch.qpos[:] = self.plan.sample_source_qpos(sample["arm_source_time"])
         mujoco.mj_kinematics(r.model, self.scratch)
@@ -257,8 +306,42 @@ class PolicyPickCarryTask(PickCarryTask):
             r.ik.orientation = source_rotation.copy()
         if self.phase in ("REACH", "LOWER", "CLOSE", "LIFT", "CARRY", "PLACE", "RELEASE"):
             r.tool_target[2] += self.tool_height_offset
+        if self.phase in ("LOWER", "CLOSE"):
+            # Recorded pad offsets and tracking error can consume the grasp
+            # clearance even in the fixed layout. Centre the actual cube.
+            blend = smooth_fraction((self.reference_time - self.phase_times["LOWER"]) / .6)
+            r.tool_target[:2] += blend * (r.data.xpos[self.cube, :2] - r.tool_target[:2])
         if self.phase == "APPROACH":
             r.tool_target = None
+        correction = np.zeros(3)
+        if self.phase in ("REACH", "LOWER", "CLOSE"):
+            if self.reference_time >= self.phase_times["LOWER"] - .5 and self.close_started is None:
+                error = r.tool_target[:2] - r.ik.position(r.data)[:2]
+                correction[:2] = np.clip(30.0 * error, -.12, .12)
+        if self.phase == "PLACE":
+            basket_rotation = r.data.xmat[self.basket].reshape(3, 3)
+            local = basket_rotation.T @ (r.data.xpos[self.cube] - r.data.xpos[self.basket])
+            inside = local.copy()
+            inside[:2] = np.clip(inside[:2], -.05, .05)
+            error = (basket_rotation @ (inside - local))[:2]
+            r.tool_target[:2] = r.ik.position(r.data)[:2] + error
+            correction[:2] = np.clip(30.0 * error, -.12, .12)
+        if r.tool_target is not None:
+            # Switching body-relative/world targets must retain the last
+            # command initially. Remove the offset while motion continues,
+            # using physics time even when a grasp gate holds the reference.
+            if self.tool_transition_pending:
+                if previous_target is not None:
+                    self.tool_position_offset = previous_target - r.tool_target
+                    self.tool_rotation_offset = Rotation.from_matrix(
+                        previous_rotation @ r.ik.orientation.T).as_rotvec()
+                self.tool_transition_pending = False
+            fraction = float(np.clip((r.data.time - self.phase_started) / self.tool_transition_s, 0, 1))
+            remaining = 1 - fraction**3 * (10 - 15 * fraction + 6 * fraction**2)
+            r.tool_target += remaining * self.tool_position_offset
+            r.ik.orientation = (Rotation.from_rotvec(remaining * self.tool_rotation_offset).as_matrix()
+                                @ r.ik.orientation)
+        self.reference.root_velocity_correction += .1 * (correction - self.reference.root_velocity_correction)
 
     def step(self) -> None:
         if self.done:
@@ -270,14 +353,23 @@ class PolicyPickCarryTask(PickCarryTask):
         sample = self.plan.sample(self.reference_time)
         wanted_phase = sample["phase"]
         hold = False
-        if wanted_phase == "CLOSE":
+        if (wanted_phase == "LOWER" and not self.descent_aligned
+                and self.reference_time >= self.phase_times["LOWER"] + .6):
+            self.descent_aligned = self.horizontal_alignment()
+            hold = not self.descent_aligned
+            self.reference.allowed_frame = (round(self.phase_times["LIFT"] / .02) - 1
+                                            if self.descent_aligned else round(self.reference_time / .02))
+        early_close = (self.episode is not None and wanted_phase == "LOWER"
+                       and self.reference_time >= self.phase_times["CLOSE"] - .9)
+        if wanted_phase == "CLOSE" or early_close:
             if self.close_started is None:
                 ready, offset = self.grasp_alignment()
                 if ready:
                     self.close_started = float(data.time)
-                else:
+                elif wanted_phase == "CLOSE":
                     hold = True
             if self.close_started is not None:
+                wanted_phase = "CLOSE"
                 r.openings[1] = self.closing_command(float(data.time) - self.close_started)
         if self.reference_time + .02 >= self.phase_times["LIFT"] and not self.grasp_verified:
             if self.close_started is not None and data.time - self.close_started >= 1.0 and np.all(self.contacts() > .1):
@@ -324,7 +416,8 @@ class PolicyPickCarryTask(PickCarryTask):
                 return
         self.gate_wait = self.gate_wait + .02 if hold else 0.
         if hold:
-            gate = "CLOSE" if not self.grasp_verified else ("RELEASE" if self.phase == "PLACE" else "CARRY")
+            gate = ("ALIGN" if self.phase == "LOWER" else "CLOSE") if not self.grasp_verified else (
+                "RELEASE" if self.phase == "PLACE" else "CARRY")
             self.gate_waits[gate] += .02
             if self.gate_wait > self.gate_timeout:
                 _, offset = self.grasp_alignment()
@@ -363,6 +456,7 @@ class PolicyPickCarryTask(PickCarryTask):
             "simulated_seconds": float(r.data.time), "reference_seconds": self.reference_time,
             "events": self.events, "visualization": self.visualization,
             "scene": r.scene_path, "policy": str(r.policy.model_path),
+            "target_body": self.target_body, "grasp_side": "right", "episode": self.episode,
             "source_trajectory": self.plan.metadata["source_trajectory"],
             "source_sha256": hashlib.sha256(Path(self.plan.metadata["source_trajectory"]).read_bytes()).hexdigest(),
             "initial_root_xyz": self.initial_root.tolist(), "initial_cube_xyz": self.initial_cube.tolist(),
@@ -379,6 +473,7 @@ class PolicyPickCarryTask(PickCarryTask):
             "extra_planner_clearance_m": r.ik.clearance_margin,
             "extra_planner_orientation_weight": r.ik.orientation_weight,
             "tool_height_offset_m": self.tool_height_offset,
+            "tool_frame_transition_s": self.tool_transition_s,
             "arm_collision_monitor": {"physics_step_s": .002, "checks": r.contact_checks,
                 "stop_penetration_m": r.collision_stop_depth,
                 "unexpected_contacts": list(r.unexpected_contacts.values())},
@@ -394,36 +489,60 @@ def main() -> int:
     parser.add_argument("--motion", type=Path, default=DEFAULT_MOTION)
     parser.add_argument("--reference", type=Path, default=SAVED_V1)
     parser.add_argument("--policy", type=Path)
+    parser.add_argument("--seed", type=int, help="Reproduce an episode; omitted means a fresh random seed")
+    parser.add_argument("--target", choices=("random", "red", "green", "blue"), default="random")
+    parser.add_argument("--fixed-layout", action="store_true", help="Use the original scene and blue target")
     parser.add_argument("--headless", action="store_true")
     parser.add_argument("--start-paused", action="store_true")
     parser.add_argument("--duration", type=float, default=45.)
-    parser.add_argument("--approach-overlap", type=float, default=3.)
+    parser.add_argument("--approach-overlap", type=float, help="Default: 6s randomized, 3s fixed layout")
     parser.add_argument("--basket-overlap", type=float, default=.6)
     parser.add_argument("--arm-source", choices=("actual", "command"), default="command")
     parser.add_argument("--arm-reference-bias", type=float, nargs=4, default=[0., 0., 0., 0.])
     parser.add_argument("--extra-mode", choices=("planned", "reference"), default="planned")
     parser.add_argument("--gate-timeout", type=float, default=3.)
-    parser.add_argument("--output", type=Path, default=ROOT / "outputs/mini3_pick_carry_policy")
+    parser.add_argument("--output", type=Path)
     args = parser.parse_args()
     if args.headless and args.start_paused:
         parser.error("Headless runs cannot start paused")
+    if args.seed is not None and args.seed < 0:
+        parser.error("Seed must be non-negative")
+    if args.fixed_layout and args.target not in ("random", "blue"):
+        parser.error("--fixed-layout replays the original blue-target task")
     if not np.isfinite(args.duration) or args.duration <= 0:
         parser.error("Duration must be finite and positive")
     if not np.isfinite(args.gate_timeout) or args.gate_timeout <= 0:
         parser.error("Gate timeout must be finite and positive")
+    if args.output is None:
+        args.output = ROOT / ("outputs/mini3_pick_carry_policy" if args.fixed_layout
+                              else "outputs/mini3_pick_carry_randomized")
     setup_paths()
+    episode = None
+    scene = args.scene
+    if not args.fixed_layout:
+        from mini3_randomized_task import generate_episode, retarget_reference
+        scene, episode = generate_episode(args.scene, args.output, seed=args.seed, target=args.target)
+        print(f"Episode seed={episode['seed']} target={episode['target_color']} "
+              f"({episode['target_body']})", flush=True)
+    overlap = args.approach_overlap
+    if overlap is None:
+        overlap = 6. if episode else 3.
     plan = build_task_reference(args.reference, original_motion=args.motion, scene_path=args.scene,
-                               approach_overlap=args.approach_overlap, basket_overlap=args.basket_overlap,
+                               approach_overlap=overlap, basket_overlap=args.basket_overlap,
                                arm_source=args.arm_source, arm_reference_bias=args.arm_reference_bias)
-    runtime = PolicyOnlyScene(args.scene, resolve_policy("sonic", args.motion, args.policy), args.motion)
+    if episode:
+        retarget_reference(plan, episode)
+    runtime = PolicyOnlyScene(scene, resolve_policy("sonic", args.motion, args.policy), args.motion)
     runtime.extra_planning_enabled = args.extra_mode == "planned"
-    task = PolicyPickCarryTask(runtime, plan, gate_timeout=args.gate_timeout)
+    task = PolicyPickCarryTask(runtime, plan, gate_timeout=args.gate_timeout,
+                               target_body=episode["target_body"] if episode else "pick_cube_3", episode=episode)
     task.visualization = "headless" if args.headless else "mujoco_viewer"
     viewer = None
     try:
         if not args.headless:
             from mini3_task_viewer import Mini3TaskViewer
             viewer = Mini3TaskViewer(runtime.model, runtime.data, start_paused=args.start_paused)
+            viewer.task_label = episode["target_color"].upper() if episode else "BLUE"
         while not task.done and runtime.data.time < args.duration:
             started = time.perf_counter()
             if viewer is not None:

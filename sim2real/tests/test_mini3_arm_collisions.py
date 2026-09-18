@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 from pathlib import Path
 import tempfile
 import unittest
@@ -40,6 +41,23 @@ XML = """
 </worldbody></mujoco>
 """
 
+TWO_HAND_XML = """
+<mujoco><worldbody>
+  <body name="left_gripper_finger_positive" pos="-.016 0 .5"><freejoint/>
+    <geom name="left_gripper_finger_positive_geom" type="box" size=".005 .01 .01"/>
+  </body>
+  <body name="right_gripper_finger_positive" pos=".016 0 .5"><freejoint/>
+    <geom name="right_gripper_finger_positive_geom" type="box" size=".005 .01 .01"/>
+  </body>
+  <body name="pick_cube_1" pos="0 0 .5"><freejoint/>
+    <geom name="pick_cube_1_geom" type="box" size=".012 .012 .012"/>
+  </body>
+  <body name="pick_cube_3" pos="1 0 .5"><freejoint/>
+    <geom name="pick_cube_3_geom" type="box" size=".012 .012 .012"/>
+  </body>
+</worldbody></mujoco>
+"""
+
 
 class Mini3ArmCollisionTest(unittest.TestCase):
     def setUp(self) -> None:
@@ -64,6 +82,55 @@ class Mini3ArmCollisionTest(unittest.TestCase):
         self.assertIn(tuple(sorted(palm)), pairs)
         camera = self.model.geom("right_gripper_rgb_housing").id
         self.assertFalse(any(camera in pair for pair in pairs))
+
+    def test_selected_target_can_limit_grasp_to_right_hand_without_changing_legacy_default(self) -> None:
+        model = mujoco.MjModel.from_xml_string(TWO_HAND_XML)
+        target = model.geom("pick_cube_1_geom").id
+        pairs = set(audit.arm_collision_pairs(model, target_geom="pick_cube_1_geom",
+                                             grasp_side="right"))
+        for side in ("left", "right"):
+            finger = model.geom(f"{side}_gripper_finger_positive_geom").id
+            self.assertEqual(audit.pair_classification(model, finger, target, "pick_cube_1_geom"),
+                             "allowed_finger_target")
+            self.assertEqual(tuple(sorted((finger, target))) in pairs, side == "left")
+            blue = model.geom("pick_cube_3_geom").id
+            self.assertIn(tuple(sorted((finger, blue))), pairs)
+
+    def test_offline_audit_uses_selected_target_and_hand_from_episode_report(self) -> None:
+        model = mujoco.MjModel.from_xml_string(TWO_HAND_XML)
+        with tempfile.TemporaryDirectory() as directory:
+            directory = Path(directory)
+            scene, trajectory = directory / "scene.xml", directory / "trajectory.npz"
+            scene.write_text(TWO_HAND_XML)
+            np.savez(trajectory, time=np.array([0., .02]), phase=np.array(["CLOSE", "CLOSE"]),
+                     qpos=np.tile(model.qpos0, (2, 1)))
+            (directory / "report.json").write_text(json.dumps({"target_body": "pick_cube_1",
+                                                               "grasp_side": "right"}))
+            report = audit.audit(trajectory, scene)
+            self.assertEqual(report["target_geom"], "pick_cube_1_geom")
+            self.assertEqual(report["grasp_side"], "right")
+            self.assertIn("pick_cube_1_geom", report["rules"]["allowed_grasp"])
+            self.assertNotIn("pick_cube_3_geom", report["rules"]["allowed_grasp"])
+            for side in ("left", "right"):
+                pair = {f"{side}_gripper_finger_positive_geom", "pick_cube_1_geom"}
+                contact = next(record for record in report["all_pairs"] if set(record["geoms"]) == pair)
+                self.assertEqual(contact["unexpected_frames"], 2 if side == "left" else 0)
+
+    def test_legacy_report_retains_two_hand_permission(self) -> None:
+        xml = TWO_HAND_XML.replace("pick_cube_1", "pick_cube_2").replace('pos="1 0 .5"', 'pos="0 0 .5"')
+        model = mujoco.MjModel.from_xml_string(xml)
+        with tempfile.TemporaryDirectory() as directory:
+            directory = Path(directory)
+            scene, trajectory = directory / "scene.xml", directory / "trajectory.npz"
+            scene.write_text(xml)
+            np.savez(trajectory, time=np.array([0.]), phase=np.array(["CLOSE"]),
+                     qpos=np.tile(model.qpos0, (1, 1)))
+            report = audit.audit(trajectory, scene)
+            self.assertEqual(report["target_geom"], "pick_cube_3_geom")
+            self.assertIsNone(report["grasp_side"])
+            targets = [pair for pair in report["all_pairs"] if "pick_cube_3_geom" in pair["geoms"]]
+            self.assertEqual(len(targets), 2)
+            self.assertTrue(all(pair["unexpected_frames"] == 0 for pair in targets))
 
     def test_sat_returns_positive_box_gap_without_changing_physics(self) -> None:
         data = mujoco.MjData(self.model)

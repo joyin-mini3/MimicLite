@@ -109,6 +109,7 @@ class PerturbingViewer:
         self._last_left_click_time = self._last_right_click_time = None
         self._last_mouse_x = self._last_mouse_y = 0
         self.is_alive, self._paused = True, False
+        self._hide_menus = kwargs.get("hide_menus", False)
         self._overlay = {}
         self.frames, self.forwarded_keys = [], []
         self.close_count = 0
@@ -224,6 +225,24 @@ class Mini3TaskViewerTest(unittest.TestCase):
         self.mouse(button, mods=mods, at=start)
         self.mouse(button, FakeGlfw.RELEASE, mods=mods, at=start + 0.05)
         self.mouse(button, mods=mods, at=start + 0.1)
+
+    def test_target_remains_visible_when_viewer_menus_are_hidden(self):
+        viewer = Mini3TaskViewer(self.model, self.data, start_paused=True)
+        self.addCleanup(viewer.close)
+        self.assertTrue(viewer._viewer._hide_menus)
+        for color in ("RED", "GREEN", "BLUE"):
+            with self.subTest(color=color):
+                viewer.task_label = color
+                viewer.render(self.data)
+                # mujoco_viewer suppresses TOPLEFT and BOTTOMLEFT with
+                # hide_menus=True; task status must use a visible region.
+                visible = {position: text for position, text in viewer._viewer._overlay.items()
+                           if position not in (mujoco.mjtGridPos.mjGRID_TOPLEFT,
+                                               mujoco.mjtGridPos.mjGRID_BOTTOMLEFT)}
+                labels, values = visible[mujoco.mjtGridPos.mjGRID_TOPRIGHT]
+                self.assertIn("Target", labels.splitlines())
+                self.assertIn(color, values.splitlines())
+                self.assertIn("PAUSED", values.splitlines())
 
     def test_mouse_rotation_pan_and_zoom_use_real_mujoco_camera_api(self):
         viewer = Mini3TaskViewer(self.model, self.data)

@@ -9,6 +9,7 @@ from unittest.mock import mock_open, patch
 
 import mujoco
 import numpy as np
+from scipy.spatial.transform import Rotation
 
 from test_mini3_pick_carry import PolicyDouble, ROOT, compatible_policy_config
 from mini3_pick_carry_policy import AddedJointPlanner, GatedReference, PolicyOnlyScene, PolicyPickCarryTask
@@ -23,7 +24,7 @@ class PolicyTaskControlTest(unittest.TestCase):
             with patch("builtins.open", mock_open(read_data=json.dumps(compatible_policy_config()))):
                 self.scene = PolicyOnlyScene(SCENE, Path("unused.yaml"), Path("unused.npz"))
 
-    def make_task(self):
+    def make_task(self, target_body="pick_cube_3", *, phases=None):
         """A short synthetic reference isolates gates from private policy data."""
         scene, state = self.scene, self.scene.state
         state.joint_names = scene.names
@@ -35,9 +36,10 @@ class PolicyTaskControlTest(unittest.TestCase):
         # Different poses beyond each gate make leaked future samples observable.
         poses[50:, scene.names.index("right_elbow_pitch_joint") + 7] += .1
         poses[100:, 0] += .1
-        phases = {"APPROACH": 0., "CLEAR_ARM": .1, "REACH": .2, "LOWER": .3,
-                  "CLOSE": .5, "LIFT": 1., "CARRY": 2., "PLACE": 2.2,
-                  "RELEASE": 2.5, "SUCCESS": 3.}
+        if phases is None:
+            phases = {"APPROACH": 0., "CLEAR_ARM": .1, "REACH": .2, "LOWER": .3,
+                      "CLOSE": .5, "LIFT": 1., "CARRY": 2., "PLACE": 2.2,
+                      "RELEASE": 2.5, "SUCCESS": 3.}
 
         def sample(time):
             phase = max((key for key in phases if phases[key] <= time + 1e-9),
@@ -50,10 +52,44 @@ class PolicyTaskControlTest(unittest.TestCase):
                                sample_source_qpos=lambda time: scene.data.qpos.copy(),
                                events=[{"phase": key, "time": value} for key, value in phases.items()])
         with patch("builtins.print"):
-            return PolicyPickCarryTask(scene, plan)
+            return PolicyPickCarryTask(scene, plan, target_body=target_body)
+
+    def test_target_switch_updates_task_planner_and_collision_monitor(self):
+        scene = self.scene
+        for index in (1, 2, 3):
+            with self.subTest(target=index):
+                task = self.make_task(f"pick_cube_{index}")
+                self.assertEqual(task.cube_geom, scene.model.geom(f"pick_cube_{index}_geom").id)
+                for other in (1, 2, 3):
+                    cube = scene.model.geom(f"pick_cube_{other}_geom").id
+                    for part in ("positive", "negative"):
+                        finger = scene.model.geom(f"right_gripper_finger_{part}_geom").id
+                        pair = tuple(sorted((cube, finger)))
+                        self.assertEqual(pair in scene.unexpected_pairs, other != index)
+                        self.assertEqual(pair in scene.pregrasp_pairs, other == index)
+                        planned = set(map(tuple, scene.ik.collision_pairs[:scene.ik.target_pair_start]))
+                        self.assertEqual(pair in planned, other != index)
+                    palm = scene.model.geom("right_gripper_palm_geom").id
+                    self.assertIn(tuple(sorted((cube, palm))), scene.unexpected_pairs)
+
+    def test_basket_success_uses_selected_cube_contact_and_velocity(self):
+        scene = self.scene
+        task = self.make_task("pick_cube_1")
+        address = int(scene.model.joint("pick_cube_1_free").qposadr[0])
+        scene.data.qpos[address:address + 3] = scene.data.xpos[task.basket] + [0., 0., .0299]
+        mujoco.mj_forward(scene.model, scene.data)
+        self.assertTrue(task.cube_in_basket())
+        velocity = int(scene.model.joint("pick_cube_1_free").dofadr[0])
+        scene.data.qvel[velocity] = .1
+        self.assertFalse(task.cube_in_basket())
 
     def test_every_original_command_channel_passes_through_all_ten_motor_substeps(self) -> None:
         scene = self.scene
+        task = self.make_task()
+        task.phase, task.reference_time = "LOWER", 1.
+        task.set_extra_plan(task.plan.sample(task.reference_time))
+        self.assertIsNone(task.episode)
+        self.assertGreater(np.linalg.norm(task.reference.root_velocity_correction), 0.)
         policy_values = tuple(np.linspace(.01 + index, .21 + index, 21)
                               for index in range(5))
         for array in policy_values:
@@ -204,6 +240,258 @@ class PolicyTaskControlTest(unittest.TestCase):
         self.assertEqual(task.reference_time, task.phase_times["CLOSE"])
         self.assertAlmostEqual(scene.openings[1], .035)
         self.assertEqual(task.reference.allowed_frame, round(task.phase_times["LIFT"] / .02) - 1)
+
+    def test_randomized_lowering_captures_alignment_without_unlocking_lift(self) -> None:
+        for ready in (False, True):
+            with self.subTest(ready=ready):
+                self.scene.reset()
+                task, scene = self.make_task(), self.scene
+                task.episode = {}
+                task.reference_time = .4  # LOWER, before scheduled CLOSE at .5.
+                scene.data.time = 8.
+                with patch.object(task, "grasp_alignment", return_value=(ready, np.zeros(3))):
+                    with patch.object(task, "set_extra_plan"), patch.object(scene, "step"), patch("builtins.print"):
+                        task.step()
+                self.assertEqual(task.close_started, 8. if ready else None)
+                self.assertEqual(task.phase, "CLOSE" if ready else "LOWER")
+                self.assertAlmostEqual(task.reference_time, .42)
+                self.assertFalse(task.grasp_verified)
+                self.assertEqual(task.reference.allowed_frame, round(task.phase_times["LIFT"] / .02) - 1)
+
+    def test_fixed_layout_keeps_original_closure_schedule(self) -> None:
+        task, scene = self.make_task(), self.scene
+        task.reference_time = .4
+        with patch.object(task, "grasp_alignment", return_value=(True, np.zeros(3))) as align:
+            with patch.object(task, "set_extra_plan"), patch.object(scene, "step"), patch("builtins.print"):
+                task.step()
+        align.assert_not_called()
+        self.assertEqual(task.phase, "LOWER")
+        self.assertIsNone(task.close_started)
+
+    def make_tool_transition(self, phase: str):
+        self.scene.reset()
+        task, scene = self.make_task(), self.scene
+        source = scene.data.qpos.copy()
+        task.plan.sample_source_qpos = lambda time: source.copy()
+        scene.data.qpos[:3] += [.11, -.04, .025]
+        scene.data.qpos[3:7] = np.roll(Rotation.from_euler("z", .25).as_quat(), 1)
+        mujoco.mj_forward(scene.model, scene.data)
+        sample = task.plan.sample(task.phase_times[phase])
+        # Obtain the steady command in the new frame before applying a switch.
+        task.phase = phase
+        task.set_extra_plan(sample)
+        destination = scene.tool_target.copy()
+        destination_rotation = scene.ik.orientation.copy()
+        previous = destination + [.07, -.03, .045]
+        previous_rotation = Rotation.from_euler("xyz", [.2, -.3, .4]).as_matrix() @ destination_rotation
+        scene.tool_target = previous.copy()
+        scene.ik.orientation = previous_rotation.copy()
+        scene.data.time = 10.
+        with patch("builtins.print"):
+            task.enter(phase)
+        return task, sample, previous, previous_rotation, destination, destination_rotation
+
+    def test_tool_frame_switch_is_continuous_and_finishes_at_new_frame(self) -> None:
+        for phase in ("REACH", "CARRY", "PLACE"):
+            with self.subTest(phase=phase):
+                task, sample, previous, previous_rotation, destination, rotation = self.make_tool_transition(phase)
+                scene = self.scene
+                state_before = {name: getattr(scene.data, name).copy()
+                                for name in ("qpos", "qvel", "ctrl")}
+                task.set_extra_plan(sample)
+                np.testing.assert_allclose(scene.tool_target, previous, atol=1e-12)
+                np.testing.assert_allclose(scene.ik.orientation, previous_rotation, atol=1e-12)
+                # Repeated planning at the same timestamp must not re-anchor.
+                task.set_extra_plan(sample)
+                np.testing.assert_allclose(scene.tool_target, previous, atol=1e-12)
+                scene.data.time = 10.2
+                task.set_extra_plan(sample)
+                np.testing.assert_allclose(scene.tool_target, .5 * (previous + destination), atol=1e-12)
+                relative = Rotation.from_matrix(previous_rotation @ rotation.T).as_rotvec()
+                halfway = Rotation.from_rotvec(.5 * relative).as_matrix() @ rotation
+                np.testing.assert_allclose(scene.ik.orientation, halfway, atol=1e-12)
+                np.testing.assert_allclose(scene.ik.orientation.T @ scene.ik.orientation, np.eye(3), atol=1e-12)
+                self.assertAlmostEqual(np.linalg.det(scene.ik.orientation), 1.)
+                for elapsed in (.4, .8):
+                    scene.data.time = 10. + elapsed
+                    task.set_extra_plan(sample)
+                    np.testing.assert_allclose(scene.tool_target, destination, atol=1e-12)
+                    np.testing.assert_allclose(scene.ik.orientation, rotation, atol=1e-12)
+                for name, before in state_before.items():
+                    np.testing.assert_array_equal(getattr(scene.data, name), before)
+                np.testing.assert_array_equal(scene.extra_reference, sample["extra_command"])
+
+    def test_tool_transition_eases_at_endpoints_and_advances_while_reference_is_held(self) -> None:
+        task, sample, previous, previous_rotation, destination, rotation = self.make_tool_transition("REACH")
+        scene = self.scene
+        held_reference_time = task.reference_time
+        task.set_extra_plan(sample)
+        distance = np.linalg.norm(destination - previous)
+        angle = Rotation.from_matrix(previous_rotation @ rotation.T).magnitude()
+        for elapsed, position_endpoint, rotation_endpoint in (
+                (.02, previous, previous_rotation), (.38, destination, rotation)):
+            scene.data.time = 10. + elapsed
+            task.set_extra_plan(sample)
+            self.assertLess(np.linalg.norm(scene.tool_target - position_endpoint), .002 * distance)
+            self.assertLess(Rotation.from_matrix(scene.ik.orientation @ rotation_endpoint.T).magnitude(), .002 * angle)
+        scene.data.time = 10.4
+        task.set_extra_plan(sample)
+        self.assertEqual(task.reference_time, held_reference_time)
+        np.testing.assert_allclose(scene.tool_target, destination, atol=1e-12)
+        np.testing.assert_allclose(scene.ik.orientation, rotation, atol=1e-12)
+
+    def test_approach_without_previous_tool_target_does_not_reuse_transition_offsets(self) -> None:
+        task, sample, *_ = self.make_tool_transition("REACH")
+        scene = self.scene
+        task.set_extra_plan(sample)
+        self.assertGreater(np.linalg.norm(task.tool_position_offset), 0.)
+        with patch("builtins.print"):
+            task.enter("APPROACH")
+        task.set_extra_plan(task.plan.sample(0.))
+        self.assertIsNone(scene.tool_target)
+        with patch("builtins.print"):
+            task.enter("REACH")
+        task.set_extra_plan(sample)
+        first_position, first_rotation = scene.tool_target.copy(), scene.ik.orientation.copy()
+        scene.data.time += .4
+        task.set_extra_plan(sample)
+        np.testing.assert_allclose(scene.tool_target, first_position, atol=1e-12)
+        np.testing.assert_allclose(scene.ik.orientation, first_rotation, atol=1e-12)
+
+    def make_descent_task(self, episode=None):
+        task = self.make_task(phases={
+            "APPROACH": 0., "CLEAR_ARM": .1, "REACH": .2, "LOWER": .3,
+            "CLOSE": 1.4, "LIFT": 2., "CARRY": 2.2, "PLACE": 2.4,
+            "RELEASE": 2.6, "SUCCESS": 3.,
+        })
+        task.episode = episode
+        task.reference_time = .92
+        return task
+
+    def test_descent_alignment_holds_open_gripper_and_future_reference_then_resumes(self) -> None:
+        for episode in (None, {}):
+            with self.subTest(randomized=episode is not None):
+                self.scene.reset()
+                self.assert_descent_alignment_holds_then_resumes(episode)
+
+    def assert_descent_alignment_holds_then_resumes(self, episode) -> None:
+        task, scene = self.make_descent_task(episode), self.scene
+        held_time = task.reference_time
+        with patch.object(task, "horizontal_alignment", side_effect=(False, True)):
+            with patch.object(task, "grasp_alignment", return_value=(False, np.zeros(3))):
+                with patch.object(task, "set_extra_plan"), patch.object(scene, "step") as integrate:
+                    with patch("builtins.print"):
+                        task.step()
+                        self.assertEqual(task.phase, "LOWER")
+                        self.assertFalse(task.descent_aligned)
+                        self.assertEqual(task.reference_time, held_time)
+                        self.assertIsNone(task.close_started)
+                        self.assertAlmostEqual(scene.openings[1], .035)
+                        self.assertAlmostEqual(task.gate_waits["ALIGN"], .02)
+                        gate = round(held_time / .02)
+                        self.assertEqual(task.reference.allowed_frame, gate)
+                        future = task.reference.get_slice(np.array([0]), np.array([gate]),
+                                                          np.array([0, 1, 1000]))
+                        for name, values in task.reference._storage.items():
+                            np.testing.assert_array_equal(getattr(future, name), values[[[gate] * 3]])
+                        task.step()
+        self.assertEqual(integrate.call_count, 2, "Physics must continue while the reference waits")
+        self.assertTrue(task.descent_aligned)
+        self.assertAlmostEqual(task.reference_time, held_time + .02)
+        self.assertEqual(task.reference.allowed_frame, round(task.phase_times["LIFT"] / .02) - 1)
+        self.assertEqual(task.gate_wait, 0.)
+        self.assertAlmostEqual(task.gate_waits["ALIGN"], .02)
+        self.assertFalse(task.grasp_verified)
+        self.assertIsNone(task.close_started)
+
+    def test_unaligned_descent_timeout_reports_align_gate_without_closing(self) -> None:
+        task, scene = self.make_descent_task(), self.scene
+        task.gate_timeout = .03
+        with patch.object(task, "horizontal_alignment", return_value=False):
+            with patch.object(task, "grasp_alignment", return_value=(False, np.array([.03, 0, 0]))):
+                with patch.object(task, "set_extra_plan"), patch.object(scene, "step") as integrate:
+                    with patch("builtins.print"):
+                        task.step()
+                        task.step()
+        self.assertTrue(task.done)
+        self.assertFalse(task.success)
+        self.assertIn("Measured ALIGN gate not reached", task.failure)
+        self.assertAlmostEqual(task.gate_waits["ALIGN"], .04)
+        self.assertEqual(task.gate_waits["CLOSE"], 0.)
+        self.assertIsNone(task.close_started)
+        self.assertAlmostEqual(scene.openings[1], .035)
+        self.assertEqual(integrate.call_count, 1)
+
+    def test_alignment_velocity_is_bounded_smoothed_and_changes_only_reference_body_motion(self) -> None:
+        for episode in (None, {}):
+            with self.subTest(randomized=episode is not None):
+                self.scene.reset()
+                self.assert_alignment_velocity_changes_only_reference_body_motion(episode)
+
+    def assert_alignment_velocity_changes_only_reference_body_motion(self, episode) -> None:
+        task, scene = self.make_task(), self.scene
+        task.episode, task.phase, task.reference_time = episode, "LOWER", 1.
+        cube_qpos = int(scene.model.jnt_qposadr[scene.model.body_jntadr[task.cube]])
+        scene.data.qpos[cube_qpos:cube_qpos + 3] = scene.ik.position(scene.data) + [.03, -.03, 0.]
+        mujoco.mj_forward(scene.model, scene.data)
+        pose, velocity = scene.data.qpos.copy(), scene.data.qvel.copy()
+        stored = {name: values.copy() for name, values in task.reference._storage.items()}
+        sample = task.plan.sample(task.reference_time)
+        task.set_extra_plan(sample)
+        np.testing.assert_allclose(scene.tool_target[:2], scene.data.xpos[task.cube, :2])
+        np.testing.assert_allclose(task.reference.root_velocity_correction, [.012, -.012, 0.])
+        task.set_extra_plan(sample)
+        np.testing.assert_allclose(task.reference.root_velocity_correction, [.0228, -.0228, 0.])
+        for _ in range(100):
+            task.set_extra_plan(sample)
+        self.assertTrue(np.all(np.abs(task.reference.root_velocity_correction) <= .12))
+        correction = task.reference.root_velocity_correction.copy()
+        steps = np.array([0, 1, 10])
+        actual = task.reference.get_slice(np.array([0]), np.array([0]), steps)
+        for name, values in stored.items():
+            np.testing.assert_array_equal(task.reference._storage[name], values)
+            expected = values[steps][None].copy()
+            if name == "body_pos_w":
+                expected += (steps * .02)[None, :, None, None] * correction
+            elif name == "body_lin_vel_w":
+                expected += correction
+            np.testing.assert_array_equal(getattr(actual, name), expected)
+        np.testing.assert_array_equal(scene.data.qpos, pose)
+        np.testing.assert_array_equal(scene.data.qvel, velocity)
+        task.close_started = 1.
+        task.set_extra_plan(sample)
+        np.testing.assert_allclose(task.reference.root_velocity_correction, .9 * correction)
+
+    def test_placement_centers_selected_cube_in_rotated_basket_without_moving_state(self) -> None:
+        for episode in (None, {}):
+            with self.subTest(randomized=episode is not None):
+                self.scene.reset()
+                self.assert_placement_centers_selected_cube_without_moving_state(episode)
+
+    def assert_placement_centers_selected_cube_without_moving_state(self, episode) -> None:
+        task, scene = self.make_task("pick_cube_1"), self.scene
+        task.episode, task.phase = episode, "PLACE"
+        scene.model.body_quat[task.basket] = [np.sqrt(.5), 0., 0., np.sqrt(.5)]
+        mujoco.mj_forward(scene.model, scene.data)
+        rotation = scene.data.xmat[task.basket].reshape(3, 3).copy()
+        cube_qpos = int(scene.model.jnt_qposadr[scene.model.body_jntadr[task.cube]])
+        scene.data.qpos[cube_qpos:cube_qpos + 3] = (
+            scene.data.xpos[task.basket] + rotation @ [.09, -.08, .2])
+        mujoco.mj_forward(scene.model, scene.data)
+        pose, velocity = scene.data.qpos.copy(), scene.data.qvel.copy()
+        hand = scene.ik.position(scene.data).copy()
+        task.set_extra_plan(task.plan.sample(2.2))
+        expected_delta = rotation @ [-.04, .03, 0.]
+        np.testing.assert_allclose(scene.tool_target[:2], hand[:2] + expected_delta[:2])
+        np.testing.assert_allclose(task.reference.root_velocity_correction, [-.012, -.012, 0.])
+        np.testing.assert_array_equal(scene.data.qpos, pose)
+        np.testing.assert_array_equal(scene.data.qvel, velocity)
+        scene.data.qpos[cube_qpos:cube_qpos + 3] = (
+            scene.data.xpos[task.basket] + rotation @ [.02, -.03, .2])
+        mujoco.mj_forward(scene.model, scene.data)
+        task.set_extra_plan(task.plan.sample(2.2))
+        np.testing.assert_allclose(scene.tool_target[:2], hand[:2])
+        np.testing.assert_allclose(task.reference.root_velocity_correction, [-.0108, -.0108, 0.])
 
     def test_a_newly_aligned_grasp_cannot_unlock_lift_on_existing_contacts_alone(self) -> None:
         task, scene = self.make_task(), self.scene

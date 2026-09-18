@@ -368,9 +368,9 @@ class PickCarryTask:
         contained = (np.all(np.abs(relative[:2]) + half_extents[:2] < [0.12, 0.11])
                      and 0.008 < relative[2] - half_extents[2] < 0.018
                      and relative[2] + half_extents[2] < 0.12)
-        cube_v = int(model.joint("pick_cube_3_free").dofadr[0])
+        cube_v = int(model.jnt_dofadr[model.body_jntadr[self.cube]])
         bottom = model.geom("pick_basket_bottom").id
-        cube_geom = model.geom("pick_cube_3_geom").id
+        cube_geom = self.cube_geom
         resting = any({int(contact.geom1), int(contact.geom2)} == {bottom, cube_geom}
                       and contact.dist < 0.0005 for contact in data.contact)
         return bool(contained and resting and np.linalg.norm(data.qvel[cube_v:cube_v + 6]) < 0.03)

@@ -79,14 +79,18 @@ def physical_geoms(model: mujoco.MjModel) -> list[int]:
     return [i for i in range(model.ngeom) if model.geom_contype[i] or model.geom_conaffinity[i]]
 
 
-def pair_classification(model: mujoco.MjModel, first: int, second: int) -> str:
+def pair_classification(model: mujoco.MjModel, first: int, second: int,
+                        target_geom: str = TARGET_GEOM, *,
+                        grasp_side: str | None = None) -> str:
     """Classify intended mechanical interfaces narrowly, independent of filters."""
+    if grasp_side not in (None, "left", "right"):
+        raise ValueError("grasp_side must be left, right, or None")
     names = (geom_name(model, first), geom_name(model, second))
     bodies = tuple(int(model.geom_bodyid[i]) for i in (first, second))
     sides = tuple(arm_side(name) for name in names)
-    if TARGET_GEOM in names:
-        other = names[1] if names[0] == TARGET_GEOM else names[0]
-        if "gripper_finger" in other:
+    if target_geom in names:
+        other = names[1] if names[0] == target_geom else names[0]
+        if "gripper_finger" in other and (grasp_side is None or arm_side(other) == grasp_side):
             return "allowed_finger_target"
         return "unexpected_arm_target"
     if bodies[0] == bodies[1]:
@@ -150,24 +154,37 @@ def all_arm_pairs(model: mujoco.MjModel, side: str | None = None) -> list[tuple[
     return [(a, b) for k, a in enumerate(geoms) for b in geoms[k + 1:] if a in arms or b in arms]
 
 
-def arm_collision_pairs(model: mujoco.MjModel, side: str | None = None) -> list[tuple[int, int]]:
+def arm_collision_pairs(model: mujoco.MjModel, side: str | None = None, *,
+                        target_geom: str = TARGET_GEOM,
+                        grasp_side: str | None = None) -> list[tuple[int, int]]:
     """Pairs for collision-avoiding IK, including unwanted filtered self pairs.
 
-    Finger/blue-cube contact and direct mechanical interfaces are omitted.
-    Palm, wrist and forearm contact with the blue cube remain prohibited.
+    Finger/target-cube contact and direct mechanical interfaces are omitted.
+    Set grasp_side to restrict target contact to one hand; None retains the
+    original two-hand permission used by the seven-joint task.
+    Palm, wrist and forearm contact with the target cube remain prohibited.
     Collision filters do not establish mechanical permission: a distal forearm
     crossing the upper arm still appears even if welded-parent filtering hides it.
     """
     if side not in (None, "left", "right"):
         raise ValueError("side must be left, right, or None")
+    if grasp_side not in (None, "left", "right"):
+        raise ValueError("grasp_side must be left, right, or None")
     return [pair for pair in all_arm_pairs(model, side)
-            if pair_classification(model, *pair).startswith("unexpected_")]
+            if pair_classification(model, *pair, target_geom,
+                                   grasp_side=grasp_side).startswith("unexpected_")]
 
 
 def audit(trajectory: Path, scene: Path, *, distance_limit: float = .10,
           contact_tolerance: float = .002) -> dict[str, Any]:
     model = mujoco.MjModel.from_xml_path(str(scene.resolve()))
     data = mujoco.MjData(model)
+    report_path = Path(trajectory).with_name("report.json")
+    report = json.loads(report_path.read_text()) if report_path.exists() else {}
+    target_geom = report.get("target_body", "pick_cube_3") + "_geom"
+    # Policy-only task reports name the selected target and use the right hand.
+    # Older seven-joint reports omitted that field and allowed either hand.
+    grasp_side = report.get("grasp_side", "right" if "target_body" in report else None)
     with np.load(trajectory, allow_pickle=False) as saved:
         times, phases, qpos = saved["time"].copy(), saved["phase"].copy(), saved["qpos"].copy()
         qvel = saved["qvel"].copy() if "qvel" in saved else np.zeros((len(times), model.nv))
@@ -185,7 +202,8 @@ def audit(trajectory: Path, scene: Path, *, distance_limit: float = .10,
         records.append({
             "geoms": [geom_name(model, first), geom_name(model, second)],
             "bodies": [model.body(int(model.geom_bodyid[i])).name for i in (first, second)],
-            "classification": pair_classification(model, first, second),
+            "classification": pair_classification(model, first, second, target_geom,
+                                                    grasp_side=grasp_side),
             "filter_reasons": collision_filter_reasons(model, first, second),
             "minimum_gap_m": pair_limit, "minimum_gap_is_lower_bound": True,
             "distance_cap_m": pair_limit,
@@ -251,6 +269,7 @@ def audit(trajectory: Path, scene: Path, *, distance_limit: float = .10,
     unexpected_records = [record for record in records if record["unexpected_frames"]]
     return {
         "trajectory": str(trajectory.resolve()), "scene": str(scene.resolve()),
+        "target_geom": target_geom, "grasp_side": grasp_side,
         "scene_sha256": hashlib.sha256(scene.read_bytes()).hexdigest(), "mujoco_version": mujoco.__version__,
         "frames": len(times), "first_time_s": float(times[0]), "last_time_s": float(times[-1]),
         "method": "Independent MjModel/MjData; mj_forward and signed mj_geomDistance; no mj_step or changed masks",
@@ -258,7 +277,8 @@ def audit(trajectory: Path, scene: Path, *, distance_limit: float = .10,
         "rules": {
             "selected": "Physical geoms named elbow/forearm/wrist/gripper against all physical geoms; includes filtered pairs",
             "allowed": "Same component, same-side directly parented arm interfaces, same-gripper finger closure",
-            "allowed_grasp": f"Only gripper fingers against {TARGET_GEOM}, phases {sorted(GRASP_PHASES)}",
+            "allowed_grasp": (f"Only {grasp_side + '-hand' if grasp_side else 'either-hand'} gripper fingers "
+                              f"against {target_geom}, phases {sorted(GRASP_PHASES)}"),
             "unexpected": "All other arm/environment/self intersections, including filtered nonadjacent fused-body pairs",
             "distance_limit_m": distance_limit, "distance_limit_note": "Distances returned at cap are lower bounds, not measured clearances",
             "soft_contact_limit_m": contact_tolerance,
